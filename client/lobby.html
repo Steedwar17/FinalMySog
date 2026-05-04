@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lobby - Videojuego Multijugador</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #0f0f1a;
+      color: #e0e0ff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #1a1a2e;
+      border-bottom: 1px solid #2a2a3e;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #7b68ee;
+    }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .user-badge {
+      background: #2a2a3e;
+      padding: 0.4rem 0.9rem;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      color: #7b68ee;
+      font-weight: 600;
+    }
+
+    .btn-logout {
+      padding: 0.4rem 0.9rem;
+      background: #3a1a1a;
+      border: 1px solid #a03030;
+      border-radius: 20px;
+      color: #ff8888;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.2s;
+    }
+
+    .btn-logout:hover { background: #4a2020; }
+
+    main {
+      flex: 1;
+      padding: 2rem;
+      max-width: 700px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+      padding: 0.6rem 1rem;
+      background: #1a1a2e;
+      border-radius: 8px;
+      font-size: 0.85rem;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #888;
+      transition: background 0.3s;
+    }
+
+    .status-dot.connected { background: #44ff88; box-shadow: 0 0 6px #44ff88; }
+    .status-dot.disconnected { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
+    .status-dot.connecting { background: #ffaa44; box-shadow: 0 0 6px #ffaa44; }
+
+    #status-text { color: #aaa; }
+
+    h2 {
+      font-size: 1.2rem;
+      color: #aaa;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    #player-count {
+      background: #7b68ee;
+      color: #fff;
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 10px;
+      font-weight: 700;
+    }
+
+    #players-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .player-item {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.85rem 1rem;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 10px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .player-item.is-me {
+      border-color: #7b68ee;
+      background: #1e1a2e;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .player-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #2a2a4e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1rem;
+      color: #7b68ee;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .player-name {
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .you-badge {
+      font-size: 0.7rem;
+      background: #2a2a4e;
+      color: #7b68ee;
+      padding: 0.2rem 0.5rem;
+      border-radius: 10px;
+    }
+
+    .online-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #44ff88;
+      box-shadow: 0 0 4px #44ff88;
+      flex-shrink: 0;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #555;
+    }
+
+    .empty-state span { font-size: 2.5rem; display: block; margin-bottom: 0.5rem; }
+
+    .alert-box {
+      display: none;
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      background: #3a1a1a;
+      border: 1px solid #a03030;
+      color: #ff8888;
+    }
+
+    .alert-box.show { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">🎮 Multijugador</div>
+    <div class="user-info">
+      <span class="user-badge" id="current-username">...</span>
+      <button class="btn-logout" onclick="logout()">Cerrar sesión</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="status-bar">
+      <div class="status-dot connecting" id="status-dot"></div>
+      <span id="status-text">Conectando al servidor...</span>
+    </div>
+
+    <div class="alert-box" id="alert-box"></div>
+
+    <h2>
+      Jugadores en línea
+      <span id="player-count">0</span>
+    </h2>
+
+    <ul id="players-list">
+      <li class="empty-state">
+        <span>👾</span>
+        Esperando jugadores...
+      </li>
+    </ul>
+  </main>
+
+  <script src="/config.js"></script>
+  <script>
+    // ── Verificar que hay token guardado ──────────────────────────────────
+    const token    = localStorage.getItem('token');
+    const username = localStorage.getItem('username');
+
+    if (!token) {
+      window.location.href = 'login.html';
+    }
+
+    // Mostrar username del usuario actual en el header
+    document.getElementById('current-username').textContent = '👤 ' + (username || '...');
+
+    // ── URLs - vienen de las variables de entorno expuestas via config ────
+    // El servidor Express inyecta window.COORDINATOR_WS_URL en config.js
+    const COORDINATOR_WS = window.COORDINATOR_WS_URL || 'ws://localhost:5000';
+
+    // ── Estado ────────────────────────────────────────────────────────────
+    let ws = null;
+
+    // ── Conectar al coordinador con el token en query param ───────────────
+    // Estructura exacta del pdf: ws://host/connect?token=XXX
+    function connect() {
+      setStatus('connecting', 'Conectando al servidor...');
+
+      ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${token}`);
+
+      ws.onopen = () => {
+        setStatus('connected', 'Conectado');
+        hideAlert();
+      };
+
+      // Manejo de mensajes del coordinador
+      // Estructura del pdf: { "type": "players_update", "players": [...] }
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'players_update') {
+          renderPlayers(msg.players);
+        }
+      };
+
+      // Si el WS se cierra inesperadamente: mostrar mensaje y volver al login
+      // Exactamente lo que pide el pdf
+      ws.onclose = (event) => {
+        setStatus('disconnected', 'Desconectado');
+
+        // Código 4001 = token inválido (definido en el coordinador)
+        if (event.code === 4001) {
+          showAlert('Token inválido o vencido. Vuelve a iniciar sesión.');
+        } else {
+          showAlert('Sesión terminada o servidor caído. Redirigiendo al login...');
+        }
+
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+
+        setTimeout(() => {
+          window.location.href = 'login.html';
+        }, 2500);
+      };
+
+      ws.onerror = () => {
+        setStatus('disconnected', 'Error de conexión');
+      };
+    }
+
+    // ── Renderizar la lista de jugadores ──────────────────────────────────
+    // Recibe el array players: [{ userId, username }, ...]
+    // que envía el coordinador en el broadcast
+    function renderPlayers(players) {
+      const list = document.getElementById('players-list');
+      const countEl = document.getElementById('player-count');
+
+      countEl.textContent = players.length;
+
+      if (players.length === 0) {
+        list.innerHTML = `
+          <li class="empty-state">
+            <span>👾</span>
+            Esperando jugadores...
+          </li>`;
+        return;
+      }
+
+      list.innerHTML = players.map(p => {
+        const isMe = p.username === username;
+        return `
+          <li class="player-item ${isMe ? 'is-me' : ''}">
+            <div class="player-avatar">${p.username.charAt(0)}</div>
+            <span class="player-name">${escapeHtml(p.username)}</span>
+            ${isMe ? '<span class="you-badge">Tú</span>' : ''}
+            <div class="online-dot"></div>
+          </li>`;
+      }).join('');
+    }
+
+    // ── Cerrar sesión ─────────────────────────────────────────────────────
+    // El pdf pide: borrar el token y cerrar el WS
+    function logout() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      window.location.href = 'login.html';
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+    function setStatus(state, text) {
+      const dot = document.getElementById('status-dot');
+      dot.className = 'status-dot ' + state;
+      document.getElementById('status-text').textContent = text;
+    }
+
+    function showAlert(msg) {
+      const el = document.getElementById('alert-box');
+      el.textContent = msg;
+      el.classList.add('show');
+    }
+
+    function hideAlert() {
+      document.getElementById('alert-box').classList.remove('show');
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.appendChild(document.createTextNode(text));
+      return div.innerHTML;
+    }
+
+    // ── Iniciar conexión ──────────────────────────────────────────────────
+    connect();
+  </script>
+</body>
+</html>
