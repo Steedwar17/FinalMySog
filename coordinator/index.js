@@ -69,9 +69,10 @@ server.on('upgrade', (req, socket, head) => {
   const token = query.token;
 
   if (!token) {
-    console.log('[UPGRADE] Sin token, rechazando.');
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
+    // En lugar de HTTP 401, completamos upgrade y cerramos con código
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.close(4001, 'invalid token');
+    });
     return;
   }
 
@@ -79,12 +80,12 @@ server.on('upgrade', (req, socket, head) => {
   try {
     payload = jwt.verify(token, JWT_SECRET);
   } catch (err) {
-    // Token vencido, malformado o firmado con otra clave
-    console.log(`[UPGRADE] Token inválido: ${err.message}`);
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
-  }
+  // Crear un WebSocket temporal y cerrarlo con código 4001
+  const ws = new WebSocket(null); // socket no válido
+  ws.close(4001, 'invalid token');
+  socket.destroy();
+  return;
+}
 
   // Token válido: completar el upgrade y pasar el payload
   wss.handleUpgrade(req, socket, head, (ws) => {
