@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - Videojuego Multijugador</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #0f0f1a;
+      color: #e0e0ff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 420px;
+      padding: 2rem;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 2rem;
+      color: #7b68ee;
+      margin-bottom: 0.3rem;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #888;
+      margin-bottom: 2rem;
+      font-size: 0.9rem;
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 2px solid #2a2a3e;
+      margin-bottom: 1.5rem;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 0.75rem;
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: color 0.2s;
+    }
+
+    .tab-btn.active {
+      color: #7b68ee;
+      border-bottom: 2px solid #7b68ee;
+      margin-bottom: -2px;
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .form-group {
+      margin-bottom: 1rem;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 0.4rem;
+      color: #aaa;
+      font-size: 0.9rem;
+    }
+
+    input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      color: #e0e0ff;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      border-color: #7b68ee;
+    }
+
+    button[type="submit"] {
+      width: 100%;
+      padding: 0.85rem;
+      background: #7b68ee;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 0.5rem;
+      transition: background 0.2s;
+    }
+
+    button[type="submit"]:hover { background: #6a57dd; }
+    button[type="submit"]:disabled { background: #444; cursor: not-allowed; }
+
+    .message {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    .message.error {
+      background: #3a1a1a;
+      border: 1px solid #a03030;
+      color: #ff8888;
+      display: block;
+    }
+
+    .message.success {
+      background: #1a3a1a;
+      border: 1px solid #30a030;
+      color: #88ff88;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎮 Multijugador</h1>
+    <p class="subtitle">Sistemas Distribuidos - Taller 4</p>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('login')">Iniciar sesión</button>
+      <button class="tab-btn" onclick="switchTab('register')">Registrarse</button>
+    </div>
+
+    <!-- Panel Login -->
+    <div id="panel-login" class="tab-panel active">
+      <div class="form-group">
+        <label for="login-username">Usuario</label>
+        <input type="text" id="login-username" placeholder="Tu nombre de usuario" autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="login-password">Contraseña</label>
+        <input type="password" id="login-password" placeholder="Tu contraseña" autocomplete="current-password" />
+      </div>
+      <button type="submit" id="btn-login" onclick="handleLogin()">Entrar</button>
+      <div class="message" id="msg-login"></div>
+    </div>
+
+    <!-- Panel Registro -->
+    <div id="panel-register" class="tab-panel">
+      <div class="form-group">
+        <label for="reg-username">Usuario</label>
+        <input type="text" id="reg-username" placeholder="Elige un nombre de usuario" autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="reg-password">Contraseña</label>
+        <input type="password" id="reg-password" placeholder="Elige una contraseña" autocomplete="new-password" />
+      </div>
+      <button type="submit" id="btn-register" onclick="handleRegister()">Registrarse</button>
+      <div class="message" id="msg-register"></div>
+    </div>
+  </div>
+
+  <script src="/config.js"></script>
+  <script>
+    // Si ya hay token guardado, ir directo al lobby
+    if (localStorage.getItem('token')) {
+      window.location.href = 'lobby.html';
+    }
+
+    // URL del auth service - viene del archivo config.js generado por el servidor
+    // o se puede cambiar manualmente aquí si es necesario
+    const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach((b, i) => {
+        b.classList.toggle('active', (i === 0 && tab === 'login') || (i === 1 && tab === 'register'));
+      });
+      document.getElementById('panel-login').classList.toggle('active', tab === 'login');
+      document.getElementById('panel-register').classList.toggle('active', tab === 'register');
+      clearMessages();
+    }
+
+    function clearMessages() {
+      ['msg-login', 'msg-register'].forEach(id => {
+        const el = document.getElementById(id);
+        el.className = 'message';
+        el.textContent = '';
+      });
+    }
+
+    function showMessage(id, text, type) {
+      const el = document.getElementById(id);
+      el.className = 'message ' + type;
+      el.textContent = text;
+    }
+
+    async function handleLogin() {
+      const username = document.getElementById('login-username').value.trim();
+      const password = document.getElementById('login-password').value;
+
+      if (!username || !password) {
+        showMessage('msg-login', 'Por favor completa todos los campos.', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('btn-login');
+      btn.disabled = true;
+      btn.textContent = 'Entrando...';
+
+      try {
+        const res = await fetch(`${AUTH_URL}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          // Guardar token y username en localStorage, tal como pide el taller
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('username', data.username);
+          // Redirigir al lobby
+          window.location.href = 'lobby.html';
+        } else {
+          showMessage('msg-login', data.message || 'Credenciales incorrectas.', 'error');
+        }
+      } catch (err) {
+        showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Entrar';
+      }
+    }
+
+    async function handleRegister() {
+      const username = document.getElementById('reg-username').value.trim();
+      const password = document.getElementById('reg-password').value;
+
+      if (!username || !password) {
+        showMessage('msg-register', 'Por favor completa todos los campos.', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('btn-register');
+      btn.disabled = true;
+      btn.textContent = 'Registrando...';
+
+      try {
+        const res = await fetch(`${AUTH_URL}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        const data = await res.json();
+
+        if (res.status === 201) {
+          showMessage('msg-register', `¡Usuario "${data.username}" creado! Ahora inicia sesión.`, 'success');
+          // Limpiar campos y cambiar a login
+          document.getElementById('reg-username').value = '';
+          document.getElementById('reg-password').value = '';
+          setTimeout(() => switchTab('login'), 1500);
+        } else if (res.status === 409) {
+          showMessage('msg-register', 'Ese nombre de usuario ya existe.', 'error');
+        } else {
+          showMessage('msg-register', data.message || 'Error al registrar.', 'error');
+        }
+      } catch (err) {
+        showMessage('msg-register', 'No se pudo conectar con el servidor de autenticación.', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Registrarse';
+      }
+    }
+
+    // Enter para enviar formularios
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const activePanel = document.querySelector('.tab-panel.active').id;
+        if (activePanel === 'panel-login') handleLogin();
+        else handleRegister();
+      }
+    });
+  </script>
+</body>
+</html>
