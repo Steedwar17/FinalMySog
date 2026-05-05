@@ -141,6 +141,6 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
-
 # SQLite databases
 *.db
+.DS_Store
