@@ -228,26 +228,16 @@
 
   <script src="/config.js"></script>
   <script>
-    // ── Verificar que hay token guardado ──────────────────────────────────
     const token    = localStorage.getItem('token');
     const username = localStorage.getItem('username');
 
     if (!token) {
       window.location.href = 'login.html';
     }
-
-    // Mostrar username del usuario actual en el header
     document.getElementById('current-username').textContent = '👤 ' + (username || '...');
-
-    // ── URLs - vienen de las variables de entorno expuestas via config ────
-    // El servidor Express inyecta window.COORDINATOR_WS_URL en config.js
     const COORDINATOR_WS = window.COORDINATOR_WS_URL || 'ws://localhost:5000';
-
-    // ── Estado ────────────────────────────────────────────────────────────
     let ws = null;
 
-    // ── Conectar al coordinador con el token en query param ───────────────
-    // Estructura exacta del pdf: ws://host/connect?token=XXX
     function connect() {
       setStatus('connecting', 'Conectando al servidor...');
 
@@ -258,21 +248,15 @@
         hideAlert();
       };
 
-      // Manejo de mensajes del coordinador
-      // Estructura del pdf: { "type": "players_update", "players": [...] }
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'players_update') {
           renderPlayers(msg.players);
         }
       };
-
-      // Si el WS se cierra inesperadamente: mostrar mensaje y volver al login
-      // Exactamente lo que pide el pdf
       ws.onclose = (event) => {
         setStatus('disconnected', 'Desconectado');
 
-        // Código 4001 = token inválido (definido en el coordinador)
         if (event.code === 4001) {
           showAlert('Token inválido o vencido. Vuelve a iniciar sesión.');
         } else {
@@ -291,10 +275,6 @@
         setStatus('disconnected', 'Error de conexión');
       };
     }
-
-    // ── Renderizar la lista de jugadores ──────────────────────────────────
-    // Recibe el array players: [{ userId, username }, ...]
-    // que envía el coordinador en el broadcast
     function renderPlayers(players) {
       const list = document.getElementById('players-list');
       const countEl = document.getElementById('player-count');
@@ -321,9 +301,6 @@
           </li>`;
       }).join('');
     }
-
-    // ── Cerrar sesión ─────────────────────────────────────────────────────
-    // El pdf pide: borrar el token y cerrar el WS
     function logout() {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
@@ -332,8 +309,6 @@
       localStorage.removeItem('username');
       window.location.href = 'login.html';
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────
     function setStatus(state, text) {
       const dot = document.getElementById('status-dot');
       dot.className = 'status-dot ' + state;
@@ -355,8 +330,6 @@
       div.appendChild(document.createTextNode(text));
       return div.innerHTML;
     }
-
-    // ── Iniciar conexión ──────────────────────────────────────────────────
     connect();
   </script>
 </body>
