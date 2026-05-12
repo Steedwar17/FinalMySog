@@ -5,7 +5,7 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
-const { DatabaseSync } = require('node:sqlite');
+const Database = require('better-sqlite3');   // ← Cambiado para Node v20
 
 // ── Configuración ──────────────────────────────────────────────────────────────
 const PORT           = parseInt(process.env.PORT || '4000', 10);
@@ -26,7 +26,7 @@ if (!GOOGLE_CLIENT_ID) {
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // ── Base de datos ──────────────────────────────────────────────────────────────
-const db = new DatabaseSync('users.db');
+const db = new Database('users.db');   // ← Cambiado
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
