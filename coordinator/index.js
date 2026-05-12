@@ -7,7 +7,7 @@ const url = require('url');
 
 // ─── Variables de entorno ─────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET;
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 if (!JWT_SECRET) {
   console.error('[ERROR] JWT_SECRET no está definido en .env');

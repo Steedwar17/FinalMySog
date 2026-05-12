@@ -9,7 +9,7 @@ app.get('/config.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`
     window.AUTH_SERVICE_URL   = "${process.env.AUTH_SERVICE_URL   || 'http://localhost:4000'}";
-    window.COORDINATOR_WS_URL = "${process.env.COORDINATOR_WS_URL || 'ws://localhost:5000'}";
+    window.COORDINATOR_WS_URL = "${process.env.COORDINATOR_WS_URL || 'ws://localhost:5001'}";
     window.GOOGLE_CLIENT_ID   = "${process.env.GOOGLE_CLIENT_ID   || ''}";
   `);
 });
