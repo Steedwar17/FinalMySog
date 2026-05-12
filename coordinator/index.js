@@ -19,7 +19,7 @@ const WORLD_WIDTH   = 1200;
 const WORLD_HEIGHT  = 800;
 const PLAYER_RADIUS = 20;
 const PLAYER_SPEED  = 200;  // px por segundo
-const TICK_RATE     = 20;   // Hz
+const TICK_RATE     = Number(process.env.TICK_RATE || 120); // Hz
 const TICK_MS       = 1000 / TICK_RATE;
 
 // ─── App y servidor HTTP ───────────────────────────────────────────────────────
@@ -168,6 +168,11 @@ wss.on('connection', (ws, payload) => {
 
     const p = players.get(userId);
     if (!p) return;
+
+    if (msg.type === 'ping') {
+      ws.send(JSON.stringify({ type: 'pong', sentAt: msg.sentAt, serverAt: Date.now() }));
+      return;
+    }
 
     if (msg.type === 'intent') {
       const dir = msg.intent && msg.intent.dir;

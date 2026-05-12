@@ -159,6 +159,20 @@
       color: #aaa;
     }
 
+    .connection-meta {
+      margin-top: 0.65rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      font-size: 0.78rem;
+      color: #777;
+    }
+
+    #ping-value {
+      color: #e0e0ff;
+      font-weight: 700;
+    }
+
     .status-dot {
       width: 9px; height: 9px;
       border-radius: 50%;
@@ -265,6 +279,10 @@
           <div class="status-dot connecting" id="status-dot"></div>
           <span id="status-text">Conectando...</span>
         </div>
+        <div class="connection-meta">
+          <span>Ping</span>
+          <span id="ping-value">-- ms</span>
+        </div>
       </div>
 
       <div class="panel-box">
@@ -309,6 +327,8 @@
     let myTeam     = null; 
     let ws         = null;
     let game       = null;
+    let lastPlayersPanelKey = '';
+    let pingTimer  = null;
 
     function connect() {
       setStatus('connecting', 'Conectando...');
@@ -317,11 +337,17 @@
 
       ws.onopen = () => {
         setStatus('connected', 'Conectado');
+        startPingMonitor();
       };
 
       ws.onmessage = (event) => {
         let msg;
         try { msg = JSON.parse(event.data); } catch { return; }
+
+        if (msg.type === 'pong') {
+          updatePing(msg.sentAt);
+          return;
+        }
 
         if (msg.type === 'welcome') {
           myUserId = msg.you.userId;
@@ -352,6 +378,7 @@
 
       ws.onclose = (event) => {
         setStatus('disconnected', 'Desconectado');
+        stopPingMonitor();
 
         if (game) { game.stop(); }
 
@@ -365,7 +392,35 @@
         setTimeout(() => { window.location.href = 'login.html'; }, 2500);
       };
 
-      ws.onerror = () => setStatus('disconnected', 'Error de conexión');
+      ws.onerror = () => {
+        setStatus('disconnected', 'Error de conexión');
+        stopPingMonitor();
+      };
+    }
+
+    function startPingMonitor() {
+      stopPingMonitor();
+      sendPing();
+      pingTimer = setInterval(sendPing, 1000);
+    }
+
+    function stopPingMonitor() {
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+      document.getElementById('ping-value').textContent = '-- ms';
+    }
+
+    function sendPing() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'ping', sentAt: performance.now() }));
+    }
+
+    function updatePing(sentAt) {
+      if (typeof sentAt !== 'number') return;
+      const ping = Math.max(0, Math.round(performance.now() - sentAt));
+      document.getElementById('ping-value').textContent = `${ping} ms`;
     }
 
     function initGame(world) {
@@ -427,6 +482,14 @@
       scoreRed.textContent = reds;
       scoreBlu.textContent = blues;
 
+      const panelKey = players.map(p => {
+        const team = (p.extras && p.extras.team) || '';
+        return `${p.userId}:${p.username}:${team}:${p.userId === myUserId}`;
+      }).join('|');
+
+      if (panelKey === lastPlayersPanelKey) return;
+      lastPlayersPanelKey = panelKey;
+
       if (players.length === 0) {
         list.innerHTML = '<li style="color:#555;font-size:0.8rem">Sin jugadores</li>';
         return;
@@ -449,6 +512,7 @@
     }
     window.logout = function() {
       if (game) game.destroy();
+      stopPingMonitor();
       if (ws && ws.readyState === WebSocket.OPEN) ws.close();
       localStorage.removeItem('token');
       localStorage.removeItem('username');
