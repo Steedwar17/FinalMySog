@@ -16,7 +16,7 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
 // ── CORS para desarrollo local ─────────────────────────────────────────────
 const corsOptions = {
-  origin: 'http://localhost:3000',   // solo permitir el cliente local
+  origin: process.env.CORS_ORIGINS,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -184,5 +184,5 @@ app.use((_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[auth] Auth service corriendo en puerto ${PORT}`);
-  console.log(`[auth] CORS permitiendo solo http://localhost:3000`);
+  console.log(`[auth] CORS permitiendo solo ${process.env.CORS_ORIGINS}`);
 });
