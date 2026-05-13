@@ -19,7 +19,7 @@ const WORLD_WIDTH   = 1200;
 const WORLD_HEIGHT  = 800;
 const PLAYER_RADIUS = 20;
 const PLAYER_SPEED  = 200;  // px por segundo --> velocidad de movimiento del jugador
-const TICK_RATE     = Number(process.env.TICK_RATE || 120); // Hz --> tasa de actualizacion del servidor en ejecucion .
+const TICK_RATE     = Number(process.env.TICK_RATE || 120); // Hz --> tasa de actualizacion del servidor en ejecucion
 const TICK_MS       = 1000 / TICK_RATE; // --> tasa de ejecucion del game loop
 
 // ─── App y servidor HTTP ───────────────────────────────────────────────────────
@@ -63,7 +63,6 @@ function broadcastPlayers() {
   const list = Array.from(players.entries()).map(([userId, p]) => ({
     userId,
     username: p.username,
-    extras: p.extras,
     ping: p.ping,
   }));
   broadcast({ type: 'players_update', players: list });
@@ -181,6 +180,7 @@ wss.on('connection', (ws, payload) => {
     if (msg.type === 'latency_update') {
       if (typeof msg.ping !== 'number' || !Number.isFinite(msg.ping)) return;
       p.ping = Math.max(0, Math.min(9999, Math.round(msg.ping)));
+      broadcastPlayers();
       return;
     }
 
