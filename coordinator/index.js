@@ -19,7 +19,7 @@ const WORLD_WIDTH   = 1200;
 const WORLD_HEIGHT  = 800;
 const PLAYER_RADIUS = 20;
 const PLAYER_SPEED  = 200;  // px por segundo --> velocidad de movimiento del jugador
-const TICK_RATE     = Number(process.env.TICK_RATE || 120); // Hz --> tasa de actualizacion del servidor en ejecucion
+const TICK_RATE     = Number(process.env.TICK_RATE || 120); // Hz --> tasa de actualizacion del servidor en ejecucion .
 const TICK_MS       = 1000 / TICK_RATE; // --> tasa de ejecucion del game loop
 
 // ─── App y servidor HTTP ───────────────────────────────────────────────────────
