@@ -48,6 +48,7 @@ function snapshot() {
     x: p.x,
     y: p.y,
     extras: p.extras,
+    ping: p.ping,
   }));
 }
 
@@ -62,6 +63,8 @@ function broadcastPlayers() {
   const list = Array.from(players.entries()).map(([userId, p]) => ({
     userId,
     username: p.username,
+    extras: p.extras,
+    ping: p.ping,
   }));
   broadcast({ type: 'players_update', players: list });
   console.log(`[PLAYERS] ${list.length} jugador(es):`, list.map(p => p.username));
@@ -147,6 +150,7 @@ wss.on('connection', (ws, payload) => {
     y: startY,
     intent: { x: 0, y: 0 },
     extras: {},
+    ping: null,
   });
 
   ws.send(JSON.stringify({
@@ -171,6 +175,12 @@ wss.on('connection', (ws, payload) => {
 
     if (msg.type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong', sentAt: msg.sentAt, serverAt: Date.now() }));
+      return;
+    }
+
+    if (msg.type === 'latency_update') {
+      if (typeof msg.ping !== 'number' || !Number.isFinite(msg.ping)) return;
+      p.ping = Math.max(0, Math.min(9999, Math.round(msg.ping)));
       return;
     }
 

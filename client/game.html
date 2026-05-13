@@ -129,7 +129,7 @@
     }
 
     .side-panel {
-      width: 200px;
+      width: 280px;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
@@ -194,7 +194,6 @@
       background: #14142a;
       border-radius: 8px;
       font-size: 0.82rem;
-      animation: fadeIn 0.25s ease;
     }
 
     @keyframes fadeIn {
@@ -208,7 +207,14 @@
       flex-shrink: 0;
     }
 
-    .player-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .player-name { flex: 1; min-width: 0; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+    .player-ping {
+      color: #aaa;
+      font-size: 0.72rem;
+      font-variant-numeric: tabular-nums;
+      min-width: 42px;
+      text-align: right;
+    }
     .team-tag {
       font-size: 0.7rem;
       padding: 0.1rem 0.4rem;
@@ -328,6 +334,8 @@
     let ws         = null;
     let game       = null;
     let lastPlayersPanelKey = '';
+    let lastPanelSignature = '';
+    const playersPanelCache = new Map();
     let pingTimer  = null;
 
     function connect() {
@@ -367,11 +375,11 @@
           };
 
           window.lastState = enriched;
-          updateSidePanel(msg.players);
+          receivePlayersUpdate(msg.players);
           return;
         }
         if (msg.type === 'players_update') {
-          updateSidePanel(msg.players);
+          receivePlayersUpdate(msg.players);
           return;
         }
       };
@@ -421,6 +429,9 @@
       if (typeof sentAt !== 'number') return;
       const ping = Math.max(0, Math.round(performance.now() - sentAt));
       document.getElementById('ping-value').textContent = `${ping} ms`;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'latency_update', ping }));
+      }
     }
 
     function initGame(world) {
@@ -465,13 +476,44 @@
       return null; 
     }
 
+    function receivePlayersUpdate(players) {
+      const mergedPlayers = players.map(p => {
+        const previous = playersPanelCache.get(p.userId) || {};
+        const merged = {
+          ...previous,
+          ...p,
+          extras: {
+            ...(previous.extras || {}),
+            ...(p.extras || {})
+          }
+        };
+        playersPanelCache.set(p.userId, merged);
+        return merged;
+      });
+
+      const visibleIds = new Set(mergedPlayers.map(p => p.userId));
+      for (const userId of playersPanelCache.keys()) {
+        if (!visibleIds.has(userId)) playersPanelCache.delete(userId);
+      }
+
+      const signature = mergedPlayers.map(p => {
+        const team = (p.extras && p.extras.team) || '';
+        const ping = Number.isFinite(p.ping) ? p.ping : '';
+        return `${p.userId}:${p.username}:${team}:${ping}:${p.userId === myUserId}`;
+      }).join('|');
+
+      if (signature === lastPanelSignature) return;
+      lastPanelSignature = signature;
+      updateSidePanel(mergedPlayers);
+    }
+
     function updateSidePanel(players) {
       const list     = document.getElementById('players-list');
       const countEl  = document.getElementById('player-count');
       const scoreRed = document.getElementById('score-red');
       const scoreBlu = document.getElementById('score-blue');
 
-      countEl.textContent = players.length;
+      setTextIfChanged(countEl, String(players.length));
 
       let reds = 0, blues = 0;
       players.forEach(p => {
@@ -479,18 +521,21 @@
         if (team === 'red')  reds++;
         if (team === 'blue') blues++;
       });
-      scoreRed.textContent = reds;
-      scoreBlu.textContent = blues;
+      setTextIfChanged(scoreRed, String(reds));
+      setTextIfChanged(scoreBlu, String(blues));
 
       const panelKey = players.map(p => {
-        const team = (p.extras && p.extras.team) || '';
-        return `${p.userId}:${p.username}:${team}:${p.userId === myUserId}`;
+        return `${p.userId}:${p.username}:${p.userId === myUserId}`;
       }).join('|');
 
-      if (panelKey === lastPlayersPanelKey) return;
+      if (panelKey === lastPlayersPanelKey) {
+        updatePlayerPings(players);
+        return;
+      }
       lastPlayersPanelKey = panelKey;
 
       if (players.length === 0) {
+        lastPlayersPanelKey = '';
         list.innerHTML = '<li style="color:#555;font-size:0.8rem">Sin jugadores</li>';
         return;
       }
@@ -499,16 +544,43 @@
         const team  = (p.extras && p.extras.team) || null;
         const color = teamColor(team) || '#7b68ee';
         const isMe  = p.userId === myUserId;
+        const ping  = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
         const tag   = team
           ? `<span class="team-tag ${team}">${team === 'red' ? '🔴' : '🔵'}</span>`
           : `<span class="team-tag none">—</span>`;
         return `
-          <li class="player-item">
+          <li class="player-item" data-user-id="${String(p.userId)}">
             <div class="player-dot" style="background:${color}"></div>
             <span class="player-name">${escapeHtml(p.username)}${isMe ? ' <small style="color:#7b68ee">(tú)</small>' : ''}</span>
+            <span class="player-ping">${ping}</span>
             ${tag}
           </li>`;
       }).join('');
+    }
+
+    function updatePlayerPings(players) {
+      players.forEach(p => {
+        const item = document.querySelector(`[data-user-id="${CSS.escape(String(p.userId))}"]`);
+        if (!item) return;
+
+        const team = (p.extras && p.extras.team) || null;
+        const color = teamColor(team) || '#7b68ee';
+        const isMe = p.userId === myUserId;
+        const ping = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
+        const tag = item.querySelector('.team-tag');
+
+        item.querySelector('.player-dot').style.background = color;
+        setTextIfChanged(item.querySelector('.player-name'), `${p.username}${isMe ? ' (tu)' : ''}`);
+        setTextIfChanged(item.querySelector('.player-ping'), ping);
+        if (tag) {
+          tag.className = `team-tag ${team || 'none'}`;
+          setTextIfChanged(tag, team === 'red' ? 'R' : team === 'blue' ? 'A' : '-');
+        }
+      });
+    }
+
+    function setTextIfChanged(el, text) {
+      if (el.textContent !== text) el.textContent = text;
     }
     window.logout = function() {
       if (game) game.destroy();
