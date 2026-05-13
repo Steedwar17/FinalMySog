@@ -42,7 +42,6 @@ node_modules/
 jspm_packages/
 
 # npm manifests
-**/package.json
 **/package-lock.json
 
 # Snowpack dependency directory (https://snowpack.dev/)
@@ -145,5 +144,5 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
-    
+
 *.db
