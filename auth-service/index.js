@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { OAuth2Client } = require('google-auth-library');
+const { OAuth2Client } = require('google-auth-library'); // -> verificacion del token generado, que no se haya falsificado y que sea valido
 const Database = require('better-sqlite3');
 
 // ── Configuración ──────────────────────────────────────────────────────────
@@ -12,11 +12,11 @@ const PORT           = parseInt(process.env.PORT || '4000', 10);
 const JWT_SECRET     = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const BCRYPT_ROUNDS  = parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID; // -> proceso de autenticacion con google, a traves del google sign-in
 
 // ── CORS para desarrollo local ─────────────────────────────────────────────
 const corsOptions = {
-  origin: 'http://localhost:3000',   // solo permitir el cliente local
+  origin: process.env.CORS_ORIGINS,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -117,7 +117,7 @@ app.post('/login', async (req, res) => {
     const match = await bcrypt.compare(password, hashToCompare);
     if (!user || !match) {
       return res.status(401).json({ error: 'Credenciales invalidas' });
-    }
+    } // -> Si el usuario existe pero su provider no es local, se le indica que debe iniciar sesión con Google
     if (user.provider !== 'local') {
       return res.status(401).json({ error: 'Este usuario debe iniciar sesion con Google' });
     }
@@ -128,7 +128,7 @@ app.post('/login', async (req, res) => {
     return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
-
+// -- Peticion de Autenticacion con google ─────────────────────────────────────────────────────────
 app.post('/auth/google', async (req, res) => {
   const { idToken, username } = req.body ?? {};
   if (typeof idToken !== 'string') {
@@ -184,5 +184,5 @@ app.use((_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[auth] Auth service corriendo en puerto ${PORT}`);
-  console.log(`[auth] CORS permitiendo solo http://localhost:3000`);
+  console.log(`[auth] CORS permitiendo solo ${process.env.CORS_ORIGINS}`);
 });
