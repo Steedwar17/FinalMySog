@@ -235,7 +235,7 @@
       window.location.href = 'login.html';
     }
     document.getElementById('current-username').textContent = '👤 ' + (username || '...');
-    const COORDINATOR_WS = window.COORDINATOR_WS_URL || 'ws://localhost:5000';
+    const COORDINATOR_WS = window.COORDINATOR_WS_URL || 'ws://localhost:5001';
     let ws = null;
 
     function connect() {

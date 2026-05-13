@@ -19,7 +19,7 @@ Este es el servicio de **Cliente Web** del proyecto final. Se encarga de la inte
 │                    token JWT                                │
 │                          │                                  │
 │   game.html   ──── WS /connect?token=XXX ──► Coordinator   │
-│                    (welcome, state,          (puerto 5000)  │
+│                    (welcome, state,          (puerto 5001)  │
 │                     intent, extras_update)                  │
 └─────────────────────────────────────────────────────────────┘
          ▲
@@ -71,7 +71,7 @@ Contenido del `.env` para desarrollo local:
 ```env
 PORT=3000
 AUTH_SERVICE_URL=http://localhost:4000
-COORDINATOR_WS_URL=ws://localhost:5000
+COORDINATOR_WS_URL=ws://localhost:5001
 GOOGLE_CLIENT_ID=<tu-client-id>.apps.googleusercontent.com
 ```
 
@@ -149,7 +149,7 @@ Con username — respuesta esperada (`200`):
 ngrok http 4000
 
 # Terminal 2 — Coordinador
-ngrok http 5000
+ngrok http 5001
 
 # Terminal 3 — Cliente Web
 ngrok http 3000
