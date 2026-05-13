@@ -18,9 +18,9 @@ if (!JWT_SECRET) {
 const WORLD_WIDTH   = 1200;
 const WORLD_HEIGHT  = 800;
 const PLAYER_RADIUS = 20;
-const PLAYER_SPEED  = 200;  // px por segundo
-const TICK_RATE     = 20;   // Hz
-const TICK_MS       = 1000 / TICK_RATE;
+const PLAYER_SPEED  = 200;  // px por segundo --> velocidad de movimiento del jugador
+const TICK_RATE     = Number(process.env.TICK_RATE || 120); // Hz --> tasa de actualizacion del servidor en ejecucion
+const TICK_MS       = 1000 / TICK_RATE; // --> tasa de ejecucion del game loop
 
 // ─── App y servidor HTTP ───────────────────────────────────────────────────────
 const app = express();
@@ -48,6 +48,7 @@ function snapshot() {
     x: p.x,
     y: p.y,
     extras: p.extras,
+    ping: p.ping,
   }));
 }
 
@@ -62,20 +63,21 @@ function broadcastPlayers() {
   const list = Array.from(players.entries()).map(([userId, p]) => ({
     userId,
     username: p.username,
+    ping: p.ping,
   }));
   broadcast({ type: 'players_update', players: list });
   console.log(`[PLAYERS] ${list.length} jugador(es):`, list.map(p => p.username));
 }
 
 // ─── Game Loop ────────────────────────────────────────────────────────────────
-let lastTick = Date.now();
+let lastTick = Date.now(); // -> para guardar el momento exacto en que se movio dentro del mundo el jugador, para que se mueva asi de manera fluida
 
-function tick() {
+function tick() { // -> cada vez que se ejecuta, se calcula el tiempo transcurrido desde el último tick para mover a los jugadores de manera fluida
   const now = Date.now();
   const dt = (now - lastTick) / 1000;
   lastTick = now;
 
-  for (const p of players.values()) {
+  for (const p of players.values()) { // -> revisa qué teclas está presionando, donde sin imporatar hacia donde se mueva este sera a la misma velocidad
     const ix = p.intent.x;
     const iy = p.intent.y;
     const mag = Math.hypot(ix, iy);
@@ -87,10 +89,10 @@ function tick() {
     p.y = Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, p.y));
   }
 
-  broadcast({ type: 'state', t: now, players: snapshot() });
+  broadcast({ type: 'state', t: now, players: snapshot() }); // -> actualizacion en timepo real la movilidad de un jugador a todos los demas.
 }
 
-setInterval(tick, TICK_MS);
+setInterval(tick, TICK_MS); // -> el servidor actualiza el estado del juego (mueve jugadores, envía posiciones)
 
 // ─── Upgrade HTTP → WebSocket ─────────────────────────────────────────────────
 server.on('upgrade', (req, socket, head) => {
@@ -147,6 +149,7 @@ wss.on('connection', (ws, payload) => {
     y: startY,
     intent: { x: 0, y: 0 },
     extras: {},
+    ping: null,
   });
 
   ws.send(JSON.stringify({
@@ -169,15 +172,27 @@ wss.on('connection', (ws, payload) => {
     const p = players.get(userId);
     if (!p) return;
 
+    if (msg.type === 'ping') {
+      ws.send(JSON.stringify({ type: 'pong', sentAt: msg.sentAt, serverAt: Date.now() }));
+      return;
+    }
+
+    if (msg.type === 'latency_update') {
+      if (typeof msg.ping !== 'number' || !Number.isFinite(msg.ping)) return;
+      p.ping = Math.max(0, Math.min(9999, Math.round(msg.ping)));
+      broadcastPlayers();
+      return;
+    }
+
     if (msg.type === 'intent') {
       const dir = msg.intent && msg.intent.dir;
-      if (!dir || typeof dir.x !== 'number' || typeof dir.y !== 'number') return;
+      if (!dir || typeof dir.x !== 'number' || typeof dir.y !== 'number') return; // -> guarda la intencion de movimiento del jugador,mas no la velocidad, ya que esto se hace en el game loop
       p.intent = { x: Math.sign(dir.x), y: Math.sign(dir.y) };
       return;
     }
 
     if (msg.type === 'extras_update') {
-      if (!msg.extras || typeof msg.extras !== 'object' || Array.isArray(msg.extras)) return;
+      if (!msg.extras || typeof msg.extras !== 'object' || Array.isArray(msg.extras)) return; // ->guarda la demas informacion que el jugador realiza, como por ejemplo la direccion a la que mira, el color y asi..
       if (JSON.stringify(msg.extras).length > 1024) return;
       p.extras = msg.extras;
       return;
