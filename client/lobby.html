@@ -76,6 +76,7 @@
       background: #1a1a2e;
       border-radius: 8px;
       font-size: 0.85rem;
+      flex-wrap: wrap;
     }
 
     .status-dot {
@@ -91,6 +92,12 @@
     .status-dot.connecting { background: #ffaa44; box-shadow: 0 0 6px #ffaa44; }
 
     #status-text { color: #aaa; }
+
+    .coordinator-badge {
+      margin-left: auto;
+      color: #777;
+      font-size: 0.8rem;
+    }
 
     h2 {
       font-size: 1.2rem;
@@ -209,6 +216,7 @@
     <div class="status-bar">
       <div class="status-dot connecting" id="status-dot"></div>
       <span id="status-text">Conectando al servidor...</span>
+      <span class="coordinator-badge">Coordinador: <strong id="coordinator-value">--</strong></span>
     </div>
 
     <div class="alert-box" id="alert-box"></div>
@@ -235,13 +243,66 @@
       window.location.href = 'login.html';
     }
     document.getElementById('current-username').textContent = '👤 ' + (username || '...');
-    const COORDINATOR_WS = window.COORDINATOR_WS_URL || 'ws://localhost:5001';
+    const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
+    const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
     let ws = null;
+    let reconnectTimer = null;
+    let manualClose = false;
 
-    function connect() {
-      setStatus('connecting', 'Conectando al servidor...');
+    async function discoverCoordinator() {
+      const res = await fetch(`${AUTH_URL}/coordinator`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-      ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${token}`);
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'No hay coordinadores disponibles.');
+      }
+
+      const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
+      if (!publicUrl) {
+        throw new Error('El directorio no devolvió una URL de coordinador.');
+      }
+
+      return {
+        coordinatorId: data.coordinatorId || data.id || 'desconocido',
+        wsUrl: toWebSocketUrl(publicUrl)
+      };
+    }
+
+    function toWebSocketUrl(url) {
+      const cleanUrl = url.replace(/\/+$/, '');
+      if (cleanUrl.startsWith('ws://') || cleanUrl.startsWith('wss://')) return cleanUrl;
+      if (cleanUrl.startsWith('https://')) return 'wss://' + cleanUrl.slice('https://'.length);
+      if (cleanUrl.startsWith('http://')) return 'ws://' + cleanUrl.slice('http://'.length);
+      return cleanUrl;
+    }
+
+    async function connect() {
+      setStatus('connecting', 'Buscando coordinador...');
+      clearReconnectTimer();
+
+      let target;
+      try {
+        target = await discoverCoordinator();
+      } catch (err) {
+        if (!FALLBACK_COORDINATOR_WS) {
+          setStatus('disconnected', 'Sin coordinador disponible');
+          showAlert(err.message);
+          scheduleReconnect();
+          return;
+        }
+        target = {
+          coordinatorId: 'fallback',
+          wsUrl: FALLBACK_COORDINATOR_WS
+        };
+      }
+
+      document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      setStatus('connecting', `Conectando a ${target.coordinatorId}...`);
+
+      ws = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
 
       ws.onopen = () => {
         setStatus('connected', 'Conectado');
@@ -257,18 +318,21 @@
       ws.onclose = (event) => {
         setStatus('disconnected', 'Desconectado');
 
+        if (manualClose) return;
+
         if (event.code === 4001) {
           showAlert('Token inválido o vencido. Vuelve a iniciar sesión.');
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          setTimeout(() => {
+            window.location.href = 'login.html';
+          }, 2500);
+          return;
         } else {
-          showAlert('Sesión terminada o servidor caído. Redirigiendo al login...');
+          showAlert('Conexión perdida con el coordinador. Buscando otro disponible...');
         }
 
-        localStorage.removeItem('token');
-        localStorage.removeItem('username');
-
-        setTimeout(() => {
-          window.location.href = 'login.html';
-        }, 2500);
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
@@ -302,6 +366,8 @@
       }).join('');
     }
     function logout() {
+      manualClose = true;
+      clearReconnectTimer();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
       }
@@ -323,6 +389,20 @@
 
     function hideAlert() {
       document.getElementById('alert-box').classList.remove('show');
+    }
+
+    function scheduleReconnect() {
+      clearReconnectTimer();
+      reconnectTimer = setTimeout(() => {
+        connect();
+      }, 1800);
+    }
+
+    function clearReconnectTimer() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
     }
 
     function escapeHtml(text) {

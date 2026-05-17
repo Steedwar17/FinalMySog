@@ -289,6 +289,10 @@
           <span>Ping</span>
           <span id="ping-value">-- ms</span>
         </div>
+        <div class="connection-meta">
+          <span>Coordinador</span>
+          <span id="coordinator-value">--</span>
+        </div>
       </div>
 
       <div class="panel-box">
@@ -325,7 +329,8 @@
 
     document.getElementById('current-username').textContent = '👤 ' + (username || '...');
 
-    const COORDINATOR_WS = window.COORDINATOR_WS_URL || 'ws://localhost:5000';
+    const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
+    const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
 
     window.lastState = null;
 
@@ -337,14 +342,69 @@
     let lastPanelSignature = '';
     const playersPanelCache = new Map();
     let pingTimer  = null;
+    let reconnectTimer = null;
+    let manualClose = false;
+    let currentCoordinator = null;
 
-    function connect() {
-      setStatus('connecting', 'Conectando...');
+    async function discoverCoordinator() {
+      const res = await fetch(`${AUTH_URL}/coordinator`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-      ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${token}`);
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'No hay coordinadores disponibles.');
+      }
+
+      const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
+      if (!publicUrl) {
+        throw new Error('El directorio no devolvió una URL de coordinador.');
+      }
+
+      return {
+        coordinatorId: data.coordinatorId || data.id || 'desconocido',
+        wsUrl: toWebSocketUrl(publicUrl)
+      };
+    }
+
+    function toWebSocketUrl(url) {
+      const cleanUrl = url.replace(/\/+$/, '');
+      if (cleanUrl.startsWith('ws://') || cleanUrl.startsWith('wss://')) return cleanUrl;
+      if (cleanUrl.startsWith('https://')) return 'wss://' + cleanUrl.slice('https://'.length);
+      if (cleanUrl.startsWith('http://')) return 'ws://' + cleanUrl.slice('http://'.length);
+      return cleanUrl;
+    }
+
+    async function connect() {
+      setStatus('connecting', 'Buscando coordinador...');
+      clearReconnectTimer();
+
+      let target;
+      try {
+        target = await discoverCoordinator();
+      } catch (err) {
+        if (!FALLBACK_COORDINATOR_WS) {
+          setStatus('disconnected', 'Sin coordinador disponible');
+          showAlert(err.message);
+          scheduleReconnect();
+          return;
+        }
+        target = {
+          coordinatorId: 'fallback',
+          wsUrl: FALLBACK_COORDINATOR_WS
+        };
+      }
+
+      currentCoordinator = target;
+      document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      setStatus('connecting', `Conectando a ${target.coordinatorId}...`);
+
+      ws = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
 
       ws.onopen = () => {
         setStatus('connected', 'Conectado');
+        hideAlert();
         startPingMonitor();
       };
 
@@ -390,14 +450,18 @@
 
         if (game) { game.stop(); }
 
-        const reason = event.code === 4001
-          ? 'Token inválido o vencido.'
-          : 'Conexión perdida con el servidor.';
+        if (manualClose) return;
 
-        showAlert(reason + ' Volviendo al login...');
-        localStorage.removeItem('token');
-        localStorage.removeItem('username');
-        setTimeout(() => { window.location.href = 'login.html'; }, 2500);
+        if (event.code === 4001) {
+          showAlert('Token inválido o vencido. Volviendo al login...');
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          setTimeout(() => { window.location.href = 'login.html'; }, 2500);
+          return;
+        }
+
+        showAlert('Conexión perdida con el coordinador. Buscando otro disponible...');
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
@@ -418,6 +482,20 @@
         pingTimer = null;
       }
       document.getElementById('ping-value').textContent = '-- ms';
+    }
+
+    function scheduleReconnect() {
+      clearReconnectTimer();
+      reconnectTimer = setTimeout(() => {
+        connect();
+      }, 1800);
+    }
+
+    function clearReconnectTimer() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
     }
 
     function sendPing() {
@@ -583,6 +661,8 @@
       if (el.textContent !== text) el.textContent = text;
     }
     window.logout = function() {
+      manualClose = true;
+      clearReconnectTimer();
       if (game) game.destroy();
       stopPingMonitor();
       if (ws && ws.readyState === WebSocket.OPEN) ws.close();
@@ -600,6 +680,10 @@
       const el = document.getElementById('alert-box');
       el.textContent = msg;
       el.classList.add('show');
+    }
+
+    function hideAlert() {
+      document.getElementById('alert-box').classList.remove('show');
     }
 
     function escapeHtml(text) {
