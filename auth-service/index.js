@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { OAuth2Client } = require('google-auth-library'); // -> verificacion del token generado, que no se haya falsificado y que sea valido
+const { OAuth2Client } = require('google-auth-library');
 const Database = require('better-sqlite3');
 
 // ── Configuración ──────────────────────────────────────────────────────────
@@ -12,9 +12,8 @@ const PORT           = parseInt(process.env.PORT || '4000', 10);
 const JWT_SECRET     = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const BCRYPT_ROUNDS  = parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID; // -> proceso de autenticacion con google, a traves del google sign-in
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
-// ── CORS para desarrollo local ─────────────────────────────────────────────
 const corsOptions = {
   origin: process.env.CORS_ORIGINS,
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -34,7 +33,7 @@ if (!GOOGLE_CLIENT_ID) {
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// ── Base de datos ─────────────────────────────────────────────────────────
+// ── Base de datos ──────────────────────────────────────────────────────────
 const db = new Database('users.db');
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -55,6 +54,23 @@ const stmts = {
   findByGoogle:   db.prepare('SELECT * FROM users WHERE google_sub = ?'),
 };
 
+// ── Directory Service — coordinadores vivos ────────────────────────────────
+// Map<coordinatorId, { publicUrl, peerUrl, connectedPlayers, uptime, lastSeen }>
+const coordinators = new Map();
+const HEARTBEAT_TIMEOUT = 6000; // 6 segundos = 3 ciclos de 2s
+
+// Limpieza automática cada 2 segundos — elimina coordinadores muertos
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, info] of coordinators.entries()) {
+    if (now - info.lastSeen > HEARTBEAT_TIMEOUT) {
+      coordinators.delete(id);
+      console.log(`[auth] Coordinador muerto eliminado: ${id}`);
+    }
+  }
+}, 2000);
+
+// ── Helpers ────────────────────────────────────────────────────────────────
 function emitToken(user) {
   return jwt.sign(
     { userId: user.id, username: user.username, provider: user.provider },
@@ -70,17 +86,18 @@ function validateUsername(u) {
   return null;
 }
 
+// ── Express ────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '4kb' }));
-
-// Manejar preflight (OPTIONS) explícitamente
 app.options('*', cors(corsOptions));
 
+// ── Health check ───────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'auth-service' });
 });
 
+// ── POST /register ─────────────────────────────────────────────────────────
 app.post('/register', async (req, res) => {
   const { username, password } = req.body ?? {};
   const usernameError = validateUsername(username);
@@ -102,6 +119,7 @@ app.post('/register', async (req, res) => {
   }
 });
 
+// ── POST /login ────────────────────────────────────────────────────────────
 app.post('/login', async (req, res) => {
   const { username, password } = req.body ?? {};
   if (typeof username !== 'string' || username.trim() === '') {
@@ -117,7 +135,7 @@ app.post('/login', async (req, res) => {
     const match = await bcrypt.compare(password, hashToCompare);
     if (!user || !match) {
       return res.status(401).json({ error: 'Credenciales invalidas' });
-    } // -> Si el usuario existe pero su provider no es local, se le indica que debe iniciar sesión con Google
+    }
     if (user.provider !== 'local') {
       return res.status(401).json({ error: 'Este usuario debe iniciar sesion con Google' });
     }
@@ -128,7 +146,8 @@ app.post('/login', async (req, res) => {
     return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
-// -- Peticion de Autenticacion con google ─────────────────────────────────────────────────────────
+
+// ── POST /auth/google ──────────────────────────────────────────────────────
 app.post('/auth/google', async (req, res) => {
   const { idToken, username } = req.body ?? {};
   if (typeof idToken !== 'string') {
@@ -178,10 +197,66 @@ app.post('/auth/google', async (req, res) => {
   }
 });
 
+// ── POST /heartbeat ────────────────────────────────────────────────────────
+// Lo llama cada coordinador cada 2 segundos para anunciar que sigue vivo
+app.post('/heartbeat', (req, res) => {
+  const { coordinatorId, publicUrl, peerUrl, connectedPlayers, uptime } = req.body ?? {};
+
+  if (!coordinatorId || !publicUrl || !peerUrl) {
+    return res.status(400).json({ error: 'coordinatorId, publicUrl y peerUrl son requeridos' });
+  }
+
+  coordinators.set(coordinatorId, {
+    coordinatorId,
+    publicUrl,
+    peerUrl,
+    connectedPlayers: connectedPlayers ?? 0,
+    uptime: uptime ?? 0,
+    lastSeen: Date.now(),
+  });
+
+  console.log(`[auth] Heartbeat de ${coordinatorId} — jugadores: ${connectedPlayers}`);
+  return res.json({ ok: true });
+});
+
+// ── GET /coordinator ───────────────────────────────────────────────────────
+// El cliente lo llama después del login para saber a qué coordinador conectarse
+// Devuelve el coordinador con menos jugadores conectados (load balancing)
+app.get('/coordinator', (req, res) => {
+  const vivos = Array.from(coordinators.values());
+
+  if (vivos.length === 0) {
+    return res.status(503).json({ error: 'no_coordinators_available' });
+  }
+
+  // Ordenar por connectedPlayers ascendente — el primero tiene menos carga
+  vivos.sort((a, b) => a.connectedPlayers - b.connectedPlayers);
+  const elegido = vivos[0];
+
+  console.log(`[auth] Cliente asignado a ${elegido.coordinatorId} (${elegido.connectedPlayers} jugadores)`);
+  return res.json({
+    coordinatorId: elegido.coordinatorId,
+    publicUrl: elegido.publicUrl,
+  });
+});
+
+// ── GET /peers ─────────────────────────────────────────────────────────────
+// Lo llaman los coordinadores para descubrir sus pares en el mesh
+app.get('/peers', (req, res) => {
+  const peers = Array.from(coordinators.values()).map(c => ({
+    coordinatorId: c.coordinatorId,
+    peerUrl: c.peerUrl,
+  }));
+
+  return res.json({ peers });
+});
+
+// ── 404 ───────────────────────────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada' });
 });
 
+// ── Arrancar ───────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`[auth] Auth service corriendo en puerto ${PORT}`);
   console.log(`[auth] CORS permitiendo solo ${process.env.CORS_ORIGINS}`);
