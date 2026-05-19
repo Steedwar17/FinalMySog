@@ -237,7 +237,7 @@
       <button type="submit" id="btn-login" onclick="handleLogin()">Entrar</button>
 
       <div class="divider">o continuar con</div>
-      // GOOGLE
+
       <div class="google-btn-wrapper">
         <div id="google-btn-login"></div>
       </div>
@@ -274,6 +274,7 @@
         placeholder="Ej: jugador42"
         maxlength="32"
       />
+      
       <div class="message" id="msg-modal"></div>
       <div class="modal-btns">
         <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
@@ -296,7 +297,7 @@
       if (typeof google === 'undefined') return;
       initGoogleSignIn();
     });
-    //INICIAR SESIÓN CON GOOGLE
+
     function initGoogleSignIn() {
       const clientId = window.GOOGLE_CLIENT_ID;
       if (!clientId) {
