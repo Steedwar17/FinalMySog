@@ -289,9 +289,10 @@
       window.location.href = 'game.html';
     }
 
-    const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
+    const API_URL = window.API_BASE_URL || '/api';
 
     let pendingGoogleIdToken = null;
+    let googleInitialized = false;
 
     window.addEventListener('load', () => {
       if (typeof google === 'undefined') return;
@@ -299,11 +300,15 @@
     });
 
     function initGoogleSignIn() {
+      if (googleInitialized) return;
+
       const clientId = window.GOOGLE_CLIENT_ID;
       if (!clientId) {
         console.warn('GOOGLE_CLIENT_ID no configurado en .env');
         return;
       }
+
+      googleInitialized = true;
 
       google.accounts.id.initialize({
         client_id: clientId,
@@ -332,7 +337,7 @@
       if (username) body.username = username;
 
       try {
-        const res = await fetch(`${AUTH_URL}/auth/google`, {
+        const res = await fetch(`${API_URL}/auth/google`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
@@ -353,7 +358,7 @@
           showModalMessage('Ese nombre ya está tomado, elige otro.', 'error');
 
         } else {
-          showMessage('msg-login', data.error || 'Error al autenticar con Google.', 'error');
+          showMessage('msg-login', data.error || data.message || 'Error al autenticar con Google.', 'error');
         }
 
       } catch (err) {
@@ -406,7 +411,7 @@
       btn.textContent = 'Entrando...';
 
       try {
-        const res = await fetch(`${AUTH_URL}/login`, {
+        const res = await fetch(`${API_URL}/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
@@ -419,7 +424,7 @@
           localStorage.setItem('username', data.username);
           window.location.href = 'game.html';
         } else {
-          showMessage('msg-login', data.message || 'Credenciales incorrectas.', 'error');
+          showMessage('msg-login', data.error || data.message || 'Credenciales incorrectas.', 'error');
         }
       } catch (err) {
         showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
@@ -444,7 +449,7 @@
       btn.textContent = 'Registrando...';
 
       try {
-        const res = await fetch(`${AUTH_URL}/register`, {
+        const res = await fetch(`${API_URL}/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
@@ -460,7 +465,7 @@
         } else if (res.status === 409) {
           showMessage('msg-register', 'Ese nombre de usuario ya existe.', 'error');
         } else {
-          showMessage('msg-register', data.message || 'Error al registrar.', 'error');
+          showMessage('msg-register', data.error || data.message || 'Error al registrar.', 'error');
         }
       } catch (err) {
         showMessage('msg-register', 'No se pudo conectar con el servidor de autenticación.', 'error');

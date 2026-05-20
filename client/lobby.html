@@ -243,14 +243,14 @@
       window.location.href = 'login.html';
     }
     document.getElementById('current-username').textContent = '👤 ' + (username || '...');
-    const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
+    const API_URL = window.API_BASE_URL || '/api';
     const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
     let ws = null;
     let reconnectTimer = null;
     let manualClose = false;
 
     async function discoverCoordinator() {
-      const res = await fetch(`${AUTH_URL}/coordinator`, {
+      const res = await fetch(`${API_URL}/coordinator`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
