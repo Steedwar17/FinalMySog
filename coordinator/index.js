@@ -1,466 +1,371 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
-const { WebSocketServer, WebSocket } = require('ws');
+const { WebSocketServer } = require('ws');
+const { WebSocket } = require('ws');
 const jwt = require('jsonwebtoken');
 const url = require('url');
 
-// ─── Variables de entorno ─────────────────────────────────────────────────────
-const JWT_SECRET     = process.env.JWT_SECRET;
-const PORT           = process.env.PORT           || 5000;
-const PEER_PORT      = process.env.PEER_PORT      || 5100;
-const COORDINATOR_ID = process.env.COORDINATOR_ID || 'coord-a';
-const PUBLIC_URL     = process.env.PUBLIC_URL     || `ws://localhost:${PORT}`;
-const PEER_URL       = process.env.PEER_URL       || `ws://localhost:${PEER_PORT}`;
-const AUTH_URL       = process.env.AUTH_URL       || 'http://localhost:4000';
+// --- Variables de entorno ---
+const JWT_SECRET = process.env.JWT_SECRET;
+const PORT = parseInt(process.env.PORT || '5001', 10);
+const COORDINATOR_ID = process.env.COORDINATOR_ID || `coord-${PORT}`;
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:4000';
+const PUBLIC_WS_URL = process.env.PUBLIC_WS_URL || `ws://localhost:${PORT}`;
 
-if (!JWT_SECRET) {
-  console.error('[ERROR] JWT_SECRET no está definido en .env');
-  process.exit(1);
-}
-
-// ─── Constantes del mundo ─────────────────────────────────────────────────────
-const WORLD_WIDTH   = 1200;
-const WORLD_HEIGHT  = 800;
+// Constantes del juego
+const WORLD_WIDTH = 1200;
+const WORLD_HEIGHT = 800;
 const PLAYER_RADIUS = 20;
-const PLAYER_SPEED  = 200;
-const TICK_RATE     = 20;
-const TICK_MS       = 1000 / TICK_RATE;
+const PLAYER_SPEED = 200;
+const TICK_RATE = Number(process.env.TICK_RATE || 120);
+const TICK_MS = 1000 / TICK_RATE;
 
-// ─── Estado en memoria ────────────────────────────────────────────────────────
-// local: true  → jugador conectado a ESTE coordinador (tiene socket)
-// local: false → jugador remoto de otro coordinador (sin socket)
-const players = new Map();
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+    console.error('[ERROR] JWT_SECRET no definida o menor a 32 caracteres');
+    process.exit(1);
+}
 
-// Peers del mesh: Map<coordinatorId, WebSocket>
-const peers = new Map();
-
-// ─── App HTTP (clientes) ──────────────────────────────────────────────────────
+// --- Servidor HTTP unificado ---
 const app = express();
-
 app.get('/health', (req, res) => {
-  const local = [...players.values()].filter(p => p.local).length;
-  res.json({
-    status: 'ok',
-    coordinatorId: COORDINATOR_ID,
-    localPlayers: local,
-    totalPlayers: players.size,
-    peers: [...peers.keys()],
-    uptime: process.uptime(),
-  });
+    res.json({ status: 'ok', connectedPlayers: players.size, coordinatorId: COORDINATOR_ID });
 });
-
 const server = http.createServer(app);
-const wss    = new WebSocketServer({ noServer: true });
 
-// ─── Servidor de peers (puerto separado) ─────────────────────────────────────
-const peerServer = http.createServer();
-const peerWss    = new WebSocketServer({ server: peerServer });
+// --- WebSocket Server maestro (sin HTTP server propio) ---
+const wss = new WebSocketServer({ noServer: true });
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function snapshot() {
-  return [...players.entries()].map(([userId, p]) => ({
-    userId,
-    username: p.username,
-    x: p.x,
-    y: p.y,
-    extras: p.extras,
-  }));
-}
+// --- Estado global del juego ---
+const players = new Map(); // userId -> { username, socket, x, y, intent, extras, ping }
+const peerConnections = new Map(); // peerId -> WebSocket
 
-// Solo a clientes locales, NUNCA a peers
-function broadcastClients(msg) {
-  const raw = JSON.stringify(msg);
-  for (const p of players.values()) {
-    if (p.local && p.socket && p.socket.readyState === WebSocket.OPEN) {
-      p.socket.send(raw);
+// --- Funciones de red ---
+function broadcastToClients(message) {
+    const data = JSON.stringify(message);
+    for (const player of players.values()) {
+        if (player.socket && player.socket.readyState === player.socket.OPEN) {
+            player.socket.send(data);
+        }
     }
-  }
 }
 
-function broadcastPlayers() {
-  const list = [...players.entries()].map(([userId, p]) => ({
-    userId, username: p.username,
-  }));
-  broadcastClients({ type: 'players_update', players: list });
+function broadcastToPeers(message, excludePeerId = null) {
+    const data = JSON.stringify(message);
+    for (const [peerId, peerSocket] of peerConnections.entries()) {
+        if (peerId === excludePeerId) continue;
+        if (peerSocket.readyState === peerSocket.OPEN) {
+            peerSocket.send(data);
+        }
+    }
 }
 
-// A todos los peers del mesh
-function broadcastPeers(msg) {
-  const raw = JSON.stringify(msg);
-  for (const ws of peers.values()) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(raw);
-  }
+function broadcastPlayersUpdate() {
+    const playerList = Array.from(players.entries()).map(([id, p]) => ({
+        userId: id,
+        username: p.username,
+        extras: p.extras,
+        ping: p.ping,
+    }));
+    broadcastToClients({ type: 'players_update', players: playerList });
+    console.log(`[BROADCAST] ${playerList.length} jugadores`);
 }
 
-// ─── Game Loop a 20 Hz ───────────────────────────────────────────────────────
+// --- Game Loop ---
 let lastTick = Date.now();
+function gameLoop() {
+    const now = Date.now();
+    const dt = (now - lastTick) / 1000;
+    lastTick = now;
 
-function tick() {
-  const now = Date.now();
-  const dt  = (now - lastTick) / 1000;
-  lastTick  = now;
-
-  for (const p of players.values()) {
-    const ix  = p.intent.x;
-    const iy  = p.intent.y;
-    const mag = Math.hypot(ix, iy);
-    if (mag > 0) {
-      p.x += (ix / mag) * PLAYER_SPEED * dt;
-      p.y += (iy / mag) * PLAYER_SPEED * dt;
+    for (const player of players.values()) {
+        const intent = player.intent;
+        if (intent.x !== 0 || intent.y !== 0) {
+            player.x += intent.x * PLAYER_SPEED * dt;
+            player.y += intent.y * PLAYER_SPEED * dt;
+            player.x = Math.max(PLAYER_RADIUS, Math.min(WORLD_WIDTH - PLAYER_RADIUS, player.x));
+            player.y = Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, player.y));
+        }
     }
-    p.x = Math.max(PLAYER_RADIUS, Math.min(WORLD_WIDTH  - PLAYER_RADIUS, p.x));
-    p.y = Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, p.y));
-  }
 
-  // State solo a clientes locales (incluye jugadores remotos en el snapshot)
-  broadcastClients({ type: 'state', t: now, players: snapshot() });
+    const snapshot = Array.from(players.entries()).map(([id, p]) => ({
+        userId: id,
+        username: p.username,
+        x: p.x,
+        y: p.y,
+        extras: p.extras,
+        ping: p.ping,
+    }));
+    broadcastToClients({ type: 'state', t: now, players: snapshot });
 }
+setInterval(gameLoop, TICK_MS);
 
-setInterval(tick, TICK_MS);
+// --- Heartbeat (cada 2s) ---
+setInterval(async () => {
+    try {
+        await fetch(`${AUTH_SERVICE_URL}/heartbeat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                coordinatorId: COORDINATOR_ID,
+                publicUrl: PUBLIC_WS_URL,
+                peerUrl: `${PUBLIC_WS_URL}/peer`,
+                connectedPlayers: Array.from(players.values()).filter(p => p.socket).length,
+                uptime: process.uptime(),
+            }),
+        });
+    } catch (err) {
+        console.error('[HEARTBEAT] Falló:', err.message);
+    }
+}, 2000);
 
-// ─── Heartbeat al auth-service cada 2 segundos ───────────────────────────────
-async function sendHeartbeat() {
-  try {
-    const localPlayers = [...players.values()].filter(p => p.local).length;
-    await fetch(`${AUTH_URL}/heartbeat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        coordinatorId:    COORDINATOR_ID,
-        publicUrl:        PUBLIC_URL,
-        peerUrl:          PEER_URL,
-        connectedPlayers: localPlayers,
-        uptime:           Math.floor(process.uptime()),
-      }),
-    });
-  } catch (err) {
-    console.warn(`[HEARTBEAT] falló: ${err.message}`);
-  }
-}
-
-setInterval(sendHeartbeat, 2000);
-sendHeartbeat();
-
-// ─── Descubrimiento de peers ─────────────────────────────────────────────────
+// --- Descubrimiento de peers (cada 10s) ---
 async function discoverPeers() {
-  try {
-    const res = await fetch(`${AUTH_URL}/peers`);
-    if (!res.ok) return;
-    const { peers: peerList } = await res.json();
+    try {
+        const response = await fetch(`${AUTH_SERVICE_URL}/peers`);
+        if (!response.ok) return;
+        const { peers: peerList } = await response.json();
 
-    for (const peer of peerList) {
-      if (peer.coordinatorId === COORDINATOR_ID) continue;
-      if (peers.has(peer.coordinatorId)) continue;
+        for (const peer of peerList) {
+            if (peer.coordinatorId === COORDINATOR_ID) continue;
+            if (peerConnections.has(peer.coordinatorId)) continue;
 
-      // Solo el de ID "menor" inicia la conexión → evita conexiones duplicadas
-      if (COORDINATOR_ID < peer.coordinatorId) {
-        connectToPeer(peer.coordinatorId, peer.peerUrl);
-      }
+            const peerUrl = new URL(peer.peerUrl);
+            peerUrl.pathname = '/peer';
+
+            if (COORDINATOR_ID.localeCompare(peer.coordinatorId) < 0) {
+                console.log(`[PEER] Conectando a ${peer.coordinatorId} en ${peerUrl.toString()}`);
+                connectToPeer(peer.coordinatorId, peerUrl.toString());
+            }
+        }
+    } catch (err) {
+        console.error('[PEER DISCOVERY] Falló:', err.message);
     }
-  } catch (err) {
-    console.warn(`[PEERS] Error descubriendo: ${err.message}`);
-  }
 }
 
 function connectToPeer(peerId, peerUrl) {
-  console.log(`[PEER] Conectando a ${peerId} en ${peerUrl}`);
-  const ws = new WebSocket(peerUrl);
-
-  ws.on('open', () => {
-    ws.send(JSON.stringify({ type: 'hello', coordinatorId: COORDINATOR_ID }));
-    peers.set(peerId, ws);
-    console.log(`[PEER] Conectado a ${peerId}`);
-
-    // Sincronizar jugadores locales al nuevo peer
-    for (const [userId, p] of players.entries()) {
-      if (p.local) {
-        ws.send(JSON.stringify({
-          type: 'player_joined', origin: COORDINATOR_ID,
-          userId, username: p.username, x: p.x, y: p.y,
-        }));
-      }
-    }
-  });
-
-  ws.on('message', (raw) => handlePeerMessage(raw, peerId));
-
-  ws.on('close', () => {
-    peers.delete(peerId);
-    removePeerPlayers(peerId);
-    console.log(`[PEER] Desconectado: ${peerId}`);
-  });
-
-  ws.on('error', (err) => console.warn(`[PEER ERROR] ${peerId}: ${err.message}`));
+    const ws = new WebSocket(peerUrl);
+    ws.on('open', () => {
+        console.log(`[PEER] Conectado a ${peerId}`);
+        ws.send(JSON.stringify({ type: 'hello', coordinatorId: COORDINATOR_ID }));
+        peerConnections.set(peerId, ws);
+    });
+    ws.on('message', (data) => handlePeerMessage(peerId, data));
+    ws.on('close', () => {
+        console.log(`[PEER] Desconectado de ${peerId}`);
+        peerConnections.delete(peerId);
+    });
+    ws.on('error', (err) => console.error(`[PEER ERROR] ${peerId}:`, err.message));
 }
 
-function removePeerPlayers(peerId) {
-  for (const [userId, p] of players.entries()) {
-    if (!p.local && p.originCoord === peerId) {
-      players.delete(userId);
+function handlePeerMessage(peerId, data) {
+    let message;
+    try { message = JSON.parse(data.toString()); } catch { return; }
+    if (message.origin === COORDINATOR_ID) return;
+
+    switch (message.type) {
+        case 'hello':
+            if (!peerConnections.has(message.coordinatorId) && message.coordinatorId !== COORDINATOR_ID) {
+                peerConnections.set(message.coordinatorId, peerConnections.get(peerId));
+            }
+            break;
+        case 'intent_replicate':
+            const player = players.get(message.userId);
+            if (player) player.intent = message.intent.dir;
+            break;
+        case 'extras_replicate':
+            const targetPlayer = players.get(message.userId);
+            if (targetPlayer) targetPlayer.extras = { ...targetPlayer.extras, ...message.extras };
+            break;
+        case 'player_joined':
+            if (!players.has(message.userId)) {
+                players.set(message.userId, {
+                    username: message.username,
+                    socket: null,
+                    x: message.x,
+                    y: message.y,
+                    intent: { x: 0, y: 0 },
+                    extras: message.extras || {},
+                    ping: null,
+                });
+                broadcastPlayersUpdate();
+            }
+            break;
+        case 'player_left':
+            if (players.has(message.userId)) {
+                players.delete(message.userId);
+                broadcastPlayersUpdate();
+            }
+            break;
     }
-  }
-  broadcastPlayers();
 }
+setInterval(discoverPeers, 10000);
+setTimeout(discoverPeers, 1000);
 
-// ─── Manejo de mensajes entre peers ──────────────────────────────────────────
-function handlePeerMessage(raw, fromPeerId) {
-  let msg;
-  try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
+// --- Manejo de upgrades (con selección de ruta) ---
+server.on('upgrade', (request, socket, head) => {
+    const { pathname, query } = url.parse(request.url, true);
+    console.log(`[UPGRADE] ${pathname} desde ${request.socket.remoteAddress}`);
 
-  // Anti-bucle: descartar si el origen somos nosotros
-  if (msg.origin === COORDINATOR_ID) return;
-
-  switch (msg.type) {
-    case 'hello':
-      // Ya manejado en peerWss.on('connection')
-      break;
-
-    case 'player_joined': {
-      const uid = String(msg.userId);
-      if (!players.has(uid)) {
-        players.set(uid, {
-          username:    msg.username,
-          socket:      null,
-          local:       false,
-          originCoord: msg.origin,
-          x:           msg.x,
-          y:           msg.y,
-          intent:      { x: 0, y: 0 },
-          extras:      {},
-        });
-        broadcastPlayers();
-        console.log(`[REMOTE JOIN] ${msg.username} desde ${msg.origin}`);
-      }
-      break;
-    }
-
-    case 'player_left': {
-      const uid = String(msg.userId);
-      if (players.has(uid) && !players.get(uid).local) {
-        players.delete(uid);
-        broadcastPlayers();
-        console.log(`[REMOTE LEAVE] userId ${msg.userId} desde ${msg.origin}`);
-      }
-      break;
-    }
-
-    case 'intent_replicate': {
-      const p = players.get(String(msg.userId));
-      if (p && msg.intent && msg.intent.dir) {
-        p.intent = {
-          x: Math.sign(msg.intent.dir.x),
-          y: Math.sign(msg.intent.dir.y),
-        };
-      }
-      break;
-    }
-
-    case 'extras_replicate': {
-      const p = players.get(String(msg.userId));
-      if (p && msg.extras && typeof msg.extras === 'object') {
-        p.extras = msg.extras;
-      }
-      break;
-    }
-  }
-}
-
-// ─── Peer server: recibe conexiones entrantes de otros coordinadores ──────────
-peerWss.on('connection', (ws) => {
-  let peerId = null;
-
-  ws.on('message', (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
-
-    if (msg.type === 'hello' && !peerId) {
-      peerId = msg.coordinatorId;
-
-      // Si ya tenemos conexión activa y nuestro ID es mayor, cerrar la nueva
-      // (el de ID menor es quien inicia; el mayor espera recibirla)
-      if (peers.has(peerId) && COORDINATOR_ID > peerId) {
-        ws.close();
-        return;
-      }
-
-      peers.set(peerId, ws);
-      console.log(`[PEER] ${peerId} entró al mesh`);
-
-      // Sincronizar jugadores locales al nuevo peer
-      for (const [userId, p] of players.entries()) {
-        if (p.local) {
-          ws.send(JSON.stringify({
-            type: 'player_joined', origin: COORDINATOR_ID,
-            userId, username: p.username, x: p.x, y: p.y,
-          }));
+    if (pathname === '/connect') {
+        // Conexión de clientes: verificar token JWT
+        const token = query.token;
+        if (!token) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
         }
-      }
-      return;
+
+        let payload;
+        try {
+            payload = jwt.verify(token, JWT_SECRET);
+        } catch (err) {
+            console.log(`[UPGRADE] Token inválido: ${err.message}`);
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
+        }
+
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, payload);
+        });
+    } 
+    else if (pathname === '/peer') {
+        // Conexión de peers: aceptar sin verificación adicional
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('peerConnection', ws);
+        });
+    } 
+    else {
+        socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+        socket.destroy();
     }
-
-    if (peerId) handlePeerMessage(raw, peerId);
-  });
-
-  ws.on('close', () => {
-    if (peerId) {
-      peers.delete(peerId);
-      removePeerPlayers(peerId);
-      console.log(`[PEER] ${peerId} salió del mesh`);
-    }
-  });
-
-  ws.on('error', (err) => console.warn(`[PEER SERVER ERROR] ${err.message}`));
 });
 
-// ─── Upgrade HTTP → WebSocket de clientes ────────────────────────────────────
-server.on('upgrade', (req, socket, head) => {
-  const { pathname, query } = url.parse(req.url, true);
-
-  if (pathname !== '/connect') {
-    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  const token = query.token;
-  if (!token) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  let payload;
-  try {
-    payload = jwt.verify(token, JWT_SECRET);
-  } catch (err) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, payload);
-  });
-});
-
-// ─── Conexión de clientes ─────────────────────────────────────────────────────
+// --- Eventos para clientes (/connect) ---
 wss.on('connection', (ws, payload) => {
-  const userId   = String(payload.userId);
-  const username = payload.username;
-  console.log(`[CONNECT] ${username} (${userId})`);
+    const { userId, username } = payload;
+    console.log(`[CONNECT] ${username} (${userId})`);
 
-  // Doble pestaña: cerrar sesión anterior
-  if (players.has(userId) && players.get(userId).local) {
-    players.get(userId).socket.close(4001, 'Nueva sesión en otra pestaña');
-    players.delete(userId);
-  }
-
-  const startX = PLAYER_RADIUS + Math.random() * (WORLD_WIDTH  - 2 * PLAYER_RADIUS);
-  const startY = PLAYER_RADIUS + Math.random() * (WORLD_HEIGHT - 2 * PLAYER_RADIUS);
-
-  players.set(userId, {
-    username,
-    socket:      ws,
-    local:       true,
-    originCoord: COORDINATOR_ID,
-    x:           startX,
-    y:           startY,
-    intent:      { x: 0, y: 0 },
-    extras:      {},
-  });
-
-  // Bienvenida al cliente — incluye coordinatorId para mostrarlo en la UI
-  ws.send(JSON.stringify({
-    type:          'welcome',
-    you:           { userId, username },
-    coordinatorId: COORDINATOR_ID,
-    world: {
-      width:        WORLD_WIDTH,
-      height:       WORLD_HEIGHT,
-      playerRadius: PLAYER_RADIUS,
-      tickRate:     TICK_RATE,
-    },
-  }));
-
-  broadcastPlayers();
-
-  // Notificar a peers que entró un jugador nuevo
-  broadcastPeers({
-    type:     'player_joined',
-    origin:   COORDINATOR_ID,
-    userId,
-    username,
-    x:        startX,
-    y:        startY,
-  });
-
-  ws.on('message', (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
-
-    const p = players.get(userId);
-    if (!p) return;
-
-    if (msg.type === 'intent') {
-      const dir = msg.intent && msg.intent.dir;
-      if (!dir || typeof dir.x !== 'number' || typeof dir.y !== 'number') return;
-      p.intent = { x: Math.sign(dir.x), y: Math.sign(dir.y) };
-
-      // Replicar a peers
-      broadcastPeers({
-        type:   'intent_replicate',
-        origin: COORDINATOR_ID,
-        userId,
-        intent: { dir: p.intent },
-      });
-      return;
+    if (players.has(userId) && players.get(userId).socket) {
+        const existing = players.get(userId);
+        existing.socket.close(4001, 'Nueva sesión en otra pestaña');
     }
 
-    if (msg.type === 'extras_update') {
-      if (!msg.extras || typeof msg.extras !== 'object' || Array.isArray(msg.extras)) return;
-      if (JSON.stringify(msg.extras).length > 1024) return;
-      p.extras = msg.extras;
+    const startX = PLAYER_RADIUS + Math.random() * (WORLD_WIDTH - 2 * PLAYER_RADIUS);
+    const startY = PLAYER_RADIUS + Math.random() * (WORLD_HEIGHT - 2 * PLAYER_RADIUS);
 
-      // Replicar a peers
-      broadcastPeers({
-        type:   'extras_replicate',
+    players.set(userId, {
+        username,
+        socket: ws,
+        x: startX,
+        y: startY,
+        intent: { x: 0, y: 0 },
+        extras: {},
+        ping: null,
+    });
+
+    ws.send(JSON.stringify({
+        type: 'welcome',
+        you: { userId, username },
+        world: { width: WORLD_WIDTH, height: WORLD_HEIGHT, playerRadius: PLAYER_RADIUS, tickRate: TICK_RATE },
+    }));
+
+    const joinMessage = {
+        type: 'player_joined',
         origin: COORDINATOR_ID,
         userId,
-        extras: msg.extras,
-      });
-      return;
-    }
-  });
+        username,
+        x: startX,
+        y: startY,
+        extras: {},
+    };
+    broadcastToPeers(joinMessage);
+    broadcastPlayersUpdate();
 
-  ws.on('close', (code) => {
-    const current = players.get(userId);
-    if (current && current.socket === ws) {
-      players.delete(userId);
-      console.log(`[DISCONNECT] ${username} (${userId})`);
-      broadcastPlayers();
+    ws.on('message', (raw) => {
+        let message;
+        try { message = JSON.parse(raw.toString()); } catch { return; }
+        const player = players.get(userId);
+        if (!player) return;
 
-      // Notificar a peers que se fue
-      broadcastPeers({
-        type:   'player_left',
-        origin: COORDINATOR_ID,
-        userId,
-      });
-    }
-  });
+        if (message.type === 'ping') {
+            ws.send(JSON.stringify({ type: 'pong', sentAt: message.sentAt }));
+            return;
+        }
+        if (message.type === 'latency_update') {
+            if (typeof message.ping === 'number') player.ping = message.ping;
+            return;
+        }
+        if (message.type === 'intent') {
+            if (message.intent && message.intent.dir) {
+                player.intent = message.intent.dir;
+                broadcastToPeers({
+                    type: 'intent_replicate',
+                    origin: COORDINATOR_ID,
+                    userId,
+                    intent: { dir: player.intent },
+                });
+            }
+            return;
+        }
+        if (message.type === 'extras_update') {
+            if (message.extras) {
+                player.extras = { ...player.extras, ...message.extras };
+                broadcastToPeers({
+                    type: 'extras_replicate',
+                    origin: COORDINATOR_ID,
+                    userId,
+                    extras: message.extras,
+                });
+                broadcastPlayersUpdate();
+            }
+            return;
+        }
+    });
 
-  ws.on('error', (err) => console.error(`[WS ERROR] ${username}: ${err.message}`));
+    ws.on('close', (code) => {
+        const current = players.get(userId);
+        if (current && current.socket === ws) {
+            players.delete(userId);
+            console.log(`[DISCONNECT] ${username} (${userId}) código: ${code}`);
+            broadcastToPeers({ type: 'player_left', origin: COORDINATOR_ID, userId });
+            broadcastPlayersUpdate();
+        }
+    });
 });
 
-// ─── Arrancar ─────────────────────────────────────────────────────────────────
+// --- Eventos para peers (/peer) ---
+wss.on('peerConnection', (ws) => {
+    let peerId = null;
+    console.log('[PEER] Nueva conexión entrante');
+
+    ws.on('message', (data) => {
+        let message;
+        try { message = JSON.parse(data.toString()); } catch { return; }
+        if (message.type === 'hello') {
+            peerId = message.coordinatorId;
+            if (peerId && peerId !== COORDINATOR_ID && !peerConnections.has(peerId)) {
+                peerConnections.set(peerId, ws);
+                console.log(`[PEER] Conexión entrante establecida con ${peerId}`);
+            }
+            return;
+        }
+        if (peerId) handlePeerMessage(peerId, data);
+    });
+
+    ws.on('close', () => {
+        if (peerId) {
+            console.log(`[PEER] Desconexión de ${peerId}`);
+            peerConnections.delete(peerId);
+        }
+    });
+});
+
+// --- Iniciar servidor ---
 server.listen(PORT, () => {
-  console.log(`[OK] Coordinador "${COORDINATOR_ID}"`);
-  console.log(`     Clientes: ws://localhost:${PORT}/connect?token=<JWT>`);
-  console.log(`     Health:   http://localhost:${PORT}/health`);
-});
-
-peerServer.listen(PEER_PORT, () => {
-  console.log(`     Peers:    ws://localhost:${PEER_PORT}`);
-  setTimeout(discoverPeers, 1000);
-  setInterval(discoverPeers, 5000);
+    console.log(`[OK] Coordinador ${COORDINATOR_ID} corriendo en puerto ${PORT}`);
+    console.log(`     URL Pública: ${PUBLIC_WS_URL}`);
+    console.log(`     Endpoint clientes: ${PUBLIC_WS_URL}/connect?token=<JWT>`);
+    console.log(`     Endpoint peers: ${PUBLIC_WS_URL}/peer`);
 });

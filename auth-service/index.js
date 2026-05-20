@@ -14,8 +14,16 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const BCRYPT_ROUNDS  = parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim());
 const corsOptions = {
-  origin: process.env.CORS_ORIGINS,
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -89,7 +97,7 @@ function validateUsername(u) {
 // ── Express ────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '4kb' }));
+app.use(express.json());
 app.options('*', cors(corsOptions));
 
 // ── Health check ───────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Login - Videojuego Multijugador</title>
+  <!-- Google Sign-In habilitado -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -126,6 +127,7 @@
       justify-content: center;
       margin-top: 0.5rem;
     }
+
     .modal-overlay {
       display: none;
       position: fixed;
@@ -145,28 +147,23 @@
       width: 100%;
       max-width: 360px;
     }
-
     .modal h2 {
       font-size: 1.2rem;
       color: #7b68ee;
       margin-bottom: 0.5rem;
     }
-
     .modal p {
       color: #aaa;
       font-size: 0.9rem;
       margin-bottom: 1rem;
     }
-
     .modal input {
       margin-bottom: 1rem;
     }
-
     .modal-btns {
       display: flex;
       gap: 0.75rem;
     }
-
     .btn-cancel {
       flex: 1;
       padding: 0.75rem;
@@ -177,7 +174,6 @@
       cursor: pointer;
       font-size: 0.95rem;
     }
-
     .btn-confirm {
       flex: 2;
       padding: 0.75rem;
@@ -189,7 +185,6 @@
       font-weight: 600;
       cursor: pointer;
     }
-
     .btn-confirm:disabled { background: #444; cursor: not-allowed; }
 
     .message {
@@ -199,14 +194,12 @@
       font-size: 0.9rem;
       display: none;
     }
-
     .message.error {
       background: #3a1a1a;
       border: 1px solid #a03030;
       color: #ff8888;
       display: block;
     }
-
     .message.success {
       background: #1a3a1a;
       border: 1px solid #30a030;
@@ -217,309 +210,298 @@
 </head>
 <body>
 
-  <div class="container">
-    <h1>🎮 Multijugador</h1>
-    <p class="subtitle">Sistemas Distribuidos - Taller 5</p>
+<div class="container">
+  <h1>🎮 Multijugador</h1>
+  <p class="subtitle">Sistemas Distribuidos - Taller 6</p>
 
-    <div class="tabs">
-      <button class="tab-btn active" onclick="switchTab('login')">Iniciar sesión</button>
-      <button class="tab-btn" onclick="switchTab('register')">Registrarse</button>
-    </div>
-    <div id="panel-login" class="tab-panel active">
-      <div class="form-group">
-        <label for="login-username">Usuario</label>
-        <input type="text" id="login-username" placeholder="Tu nombre de usuario" autocomplete="username" />
-      </div>
-      <div class="form-group">
-        <label for="login-password">Contraseña</label>
-        <input type="password" id="login-password" placeholder="Tu contraseña" autocomplete="current-password" />
-      </div>
-      <button type="submit" id="btn-login" onclick="handleLogin()">Entrar</button>
-
-      <div class="divider">o continuar con</div>
-
-      <div class="google-btn-wrapper">
-        <div id="google-btn-login"></div>
-      </div>
-
-      <div class="message" id="msg-login"></div>
-    </div>
-    <div id="panel-register" class="tab-panel">
-      <div class="form-group">
-        <label for="reg-username">Usuario</label>
-        <input type="text" id="reg-username" placeholder="Elige un nombre de usuario" autocomplete="username" />
-      </div>
-      <div class="form-group">
-        <label for="reg-password">Contraseña</label>
-        <input type="password" id="reg-password" placeholder="Elige una contraseña" autocomplete="new-password" />
-      </div>
-      <button type="submit" id="btn-register" onclick="handleRegister()">Registrarse</button>
-
-      <div class="divider">o continuar con</div>
-
-      <div class="google-btn-wrapper">
-        <div id="google-btn-register"></div>
-      </div>
-
-      <div class="message" id="msg-register"></div>
-    </div>
-  </div>
-  <div class="modal-overlay" id="modal-username">
-    <div class="modal">
-      <h2>¡Bienvenido!</h2>
-      <p>Es tu primer acceso con Google. Elige un nombre de usuario para el juego.</p>
-      <input
-        type="text"
-        id="modal-username-input"
-        placeholder="Ej: jugador42"
-        maxlength="32"
-      />
-      
-      <div class="message" id="msg-modal"></div>
-      <div class="modal-btns">
-        <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
-        <button class="btn-confirm" id="btn-modal-confirm" onclick="confirmGoogleUsername()">Confirmar</button>
-      </div>
-    </div>
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('login')">Iniciar sesión</button>
+    <button class="tab-btn" onclick="switchTab('register')">Registrarse</button>
   </div>
 
-  <script src="/config.js"></script>
-  <script>
-    if (localStorage.getItem('token')) {
-      window.location.href = 'game.html';
+  <!-- Panel Login -->
+  <div id="panel-login" class="tab-panel active">
+    <div class="form-group">
+      <label for="login-username">Usuario</label>
+      <input type="text" id="login-username" placeholder="Tu nombre de usuario" autocomplete="username" />
+    </div>
+    <div class="form-group">
+      <label for="login-password">Contraseña</label>
+      <input type="password" id="login-password" placeholder="Tu contraseña" autocomplete="current-password" />
+    </div>
+    <button type="submit" id="btn-login" onclick="handleLogin()">Entrar</button>
+
+    <div class="divider">o continuar con</div>
+    <div class="google-btn-wrapper">
+      <div id="google-btn-login"></div>
+    </div>
+
+    <div class="message" id="msg-login"></div>
+  </div>
+
+  <!-- Panel Registro -->
+  <div id="panel-register" class="tab-panel">
+    <div class="form-group">
+      <label for="reg-username">Usuario</label>
+      <input type="text" id="reg-username" placeholder="Elige un nombre de usuario" autocomplete="username" />
+    </div>
+    <div class="form-group">
+      <label for="reg-password">Contraseña</label>
+      <input type="password" id="reg-password" placeholder="Elige una contraseña" autocomplete="new-password" />
+    </div>
+    <button type="submit" id="btn-register" onclick="handleRegister()">Registrarse</button>
+
+    <div class="divider">o continuar con</div>
+    <div class="google-btn-wrapper">
+      <div id="google-btn-register"></div>
+    </div>
+
+    <div class="message" id="msg-register"></div>
+  </div>
+</div>
+
+<!-- Modal para pedir username la primera vez que se usa Google -->
+<div class="modal-overlay" id="modal-username">
+  <div class="modal">
+    <h2>¡Bienvenido!</h2>
+    <p>Es tu primer acceso con Google. Elige un nombre de usuario para el juego.</p>
+    <input type="text" id="modal-username-input" placeholder="Ej: jugador42" maxlength="32" />
+    <div class="message" id="msg-modal"></div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
+      <button class="btn-confirm" id="btn-modal-confirm" onclick="confirmGoogleUsername()">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<script src="/config.js"></script>
+<script>
+  // Redirigir si ya hay token
+  if (localStorage.getItem('token')) {
+    window.location.href = 'game.html';
+  }
+
+  const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
+  let pendingGoogleIdToken = null;
+
+  // Inicializar botones de Google cuando la librería esté lista
+  window.addEventListener('load', () => {
+    if (typeof google !== 'undefined') {
+      initGoogleSignIn();
+    } else {
+      // Si el script aún no ha cargado, esperar
+      document.querySelector('script[src*="gsi/client"]').addEventListener('load', initGoogleSignIn);
+    }
+  });
+
+  function initGoogleSignIn() {
+    const clientId = window.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      console.warn('GOOGLE_CLIENT_ID no configurado en .env');
+      return;
     }
 
-    const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
-
-    let pendingGoogleIdToken = null;
-
-    window.addEventListener('load', () => {
-      if (typeof google === 'undefined') return;
-      initGoogleSignIn();
+    google.accounts.id.initialize({
+      client_id: clientId,
+      callback: handleGoogleCredential,
+      auto_select: false,
     });
 
-    function initGoogleSignIn() {
-      const clientId = window.GOOGLE_CLIENT_ID;
-      if (!clientId) {
-        console.warn('GOOGLE_CLIENT_ID no configurado en .env');
-        return;
-      }
+    google.accounts.id.renderButton(
+      document.getElementById('google-btn-login'),
+      { theme: 'filled_black', size: 'large', text: 'signin_with', width: 340 }
+    );
 
-      google.accounts.id.initialize({
-        client_id: clientId,
-        callback: handleGoogleCredential,
-        auto_select: false,
+    google.accounts.id.renderButton(
+      document.getElementById('google-btn-register'),
+      { theme: 'filled_black', size: 'large', text: 'signup_with', width: 340 }
+    );
+  }
+
+  async function handleGoogleCredential(response) {
+    const idToken = response.credential;
+    await loginWithGoogle(idToken, null);
+  }
+
+  async function loginWithGoogle(idToken, username) {
+    const body = { idToken };
+    if (username) body.username = username;
+
+    try {
+      const res = await fetch(`${AUTH_URL}/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
       });
 
-      google.accounts.id.renderButton(
-        document.getElementById('google-btn-login'),
-        { theme: 'filled_black', size: 'large', text: 'signin_with', width: 340 }
-      );
+      const data = await res.json();
 
-      google.accounts.id.renderButton(
-        document.getElementById('google-btn-register'),
-        { theme: 'filled_black', size: 'large', text: 'signup_with', width: 340 }
-      );
-    }
-
-    async function handleGoogleCredential(response) {
-      const idToken = response.credential;
-      await loginWithGoogle(idToken, null);
-    }
-
-    async function loginWithGoogle(idToken, username) {
-      const body = { idToken };
-      if (username) body.username = username;
-
-      try {
-        const res = await fetch(`${AUTH_URL}/auth/google`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-
-        const data = await res.json();
-
-        if (res.ok) {
-          localStorage.setItem('token', data.token);
-          localStorage.setItem('username', data.username);
-          window.location.href = 'game.html';
-
-        } else if (res.status === 409 && data.error === 'username_required') {
-          pendingGoogleIdToken = idToken;
-          openModal();
-
-        } else if (res.status === 409 && data.error === 'username_taken') {
-          showModalMessage('Ese nombre ya está tomado, elige otro.', 'error');
-
-        } else {
-          showMessage('msg-login', data.error || 'Error al autenticar con Google.', 'error');
-        }
-
-      } catch (err) {
-        showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
+      if (res.ok) {
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('username', data.username);
+        window.location.href = 'game.html';
+      } else if (res.status === 409 && data.error === 'username_required') {
+        pendingGoogleIdToken = idToken;
+        openModal();
+      } else if (res.status === 409 && data.error === 'username_taken') {
+        showModalMessage('Ese nombre ya está tomado, elige otro.', 'error');
+      } else {
+        showMessage('msg-login', data.error || 'Error al autenticar con Google.', 'error');
       }
+    } catch (err) {
+      showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
+    }
+  }
+
+  function openModal() {
+    document.getElementById('modal-username').classList.add('show');
+    document.getElementById('modal-username-input').focus();
+    clearModalMessage();
+  }
+
+  function closeModal() {
+    document.getElementById('modal-username').classList.remove('show');
+    document.getElementById('modal-username-input').value = '';
+    pendingGoogleIdToken = null;
+    clearModalMessage();
+  }
+
+  async function confirmGoogleUsername() {
+    const username = document.getElementById('modal-username-input').value.trim();
+    if (!username) {
+      showModalMessage('Por favor escribe un nombre de usuario.', 'error');
+      return;
     }
 
-    function openModal() {
-      document.getElementById('modal-username').classList.add('show');
-      document.getElementById('modal-username-input').focus();
-      clearModalMessage();
-    }
+    const btn = document.getElementById('btn-modal-confirm');
+    btn.disabled = true;
+    btn.textContent = 'Confirmando...';
 
-    function closeModal() {
-      document.getElementById('modal-username').classList.remove('show');
-      document.getElementById('modal-username-input').value = '';
-      pendingGoogleIdToken = null;
-      clearModalMessage();
-    }
+    await loginWithGoogle(pendingGoogleIdToken, username);
 
-    async function confirmGoogleUsername() {
-      const username = document.getElementById('modal-username-input').value.trim();
-      if (!username) {
-        showModalMessage('Por favor escribe un nombre de usuario.', 'error');
-        return;
-      }
+    btn.disabled = false;
+    btn.textContent = 'Confirmar';
+  }
 
-      const btn = document.getElementById('btn-modal-confirm');
-      btn.disabled = true;
-      btn.textContent = 'Confirmando...';
+  function showModalMessage(text, type) {
+    const el = document.getElementById('msg-modal');
+    el.className = 'message ' + type;
+    el.textContent = text;
+  }
 
-      await loginWithGoogle(pendingGoogleIdToken, username);
+  function clearModalMessage() {
+    const el = document.getElementById('msg-modal');
+    el.className = 'message';
+    el.textContent = '';
+  }
 
-      btn.disabled = false;
-      btn.textContent = 'Confirmar';
-    }
+  // --- Funciones de login/registro local (sin cambios) ---
+  function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach((b, i) => {
+      b.classList.toggle('active', (i === 0 && tab === 'login') || (i === 1 && tab === 'register'));
+    });
+    document.getElementById('panel-login').classList.toggle('active', tab === 'login');
+    document.getElementById('panel-register').classList.toggle('active', tab === 'register');
+    clearMessages();
+  }
 
-    //log local
-    async function handleLogin() {
-      const username = document.getElementById('login-username').value.trim();
-      const password = document.getElementById('login-password').value;
-
-      if (!username || !password) {
-        showMessage('msg-login', 'Por favor completa todos los campos.', 'error');
-        return;
-      }
-
-      const btn = document.getElementById('btn-login');
-      btn.disabled = true;
-      btn.textContent = 'Entrando...';
-
-      try {
-        const res = await fetch(`${AUTH_URL}/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-
-        const data = await res.json();
-
-        if (res.ok) {
-          localStorage.setItem('token', data.token);
-          localStorage.setItem('username', data.username);
-          window.location.href = 'game.html';
-        } else {
-          showMessage('msg-login', data.message || 'Credenciales incorrectas.', 'error');
-        }
-      } catch (err) {
-        showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Entrar';
-      }
-    }
-
-    //local register
-    async function handleRegister() {
-      const username = document.getElementById('reg-username').value.trim();
-      const password = document.getElementById('reg-password').value;
-
-      if (!username || !password) {
-        showMessage('msg-register', 'Por favor completa todos los campos.', 'error');
-        return;
-      }
-
-      const btn = document.getElementById('btn-register');
-      btn.disabled = true;
-      btn.textContent = 'Registrando...';
-
-      try {
-        const res = await fetch(`${AUTH_URL}/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-
-        const data = await res.json();
-
-        if (res.status === 201) {
-          showMessage('msg-register', `¡Usuario "${data.username}" creado! Ahora inicia sesión.`, 'success');
-          document.getElementById('reg-username').value = '';
-          document.getElementById('reg-password').value = '';
-          setTimeout(() => switchTab('login'), 1500);
-        } else if (res.status === 409) {
-          showMessage('msg-register', 'Ese nombre de usuario ya existe.', 'error');
-        } else {
-          showMessage('msg-register', data.message || 'Error al registrar.', 'error');
-        }
-      } catch (err) {
-        showMessage('msg-register', 'No se pudo conectar con el servidor de autenticación.', 'error');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Registrarse';
-      }
-    }
-
-    // helpers
-    function switchTab(tab) {
-      document.querySelectorAll('.tab-btn').forEach((b, i) => {
-        b.classList.toggle('active', (i === 0 && tab === 'login') || (i === 1 && tab === 'register'));
-      });
-      document.getElementById('panel-login').classList.toggle('active', tab === 'login');
-      document.getElementById('panel-register').classList.toggle('active', tab === 'register');
-      clearMessages();
-    }
-
-    function clearMessages() {
-      ['msg-login', 'msg-register'].forEach(id => {
-        const el = document.getElementById(id);
-        el.className = 'message';
-        el.textContent = '';
-      });
-    }
-
-    function showMessage(id, text, type) {
+  function clearMessages() {
+    ['msg-login', 'msg-register'].forEach(id => {
       const el = document.getElementById(id);
-      el.className = 'message ' + type;
-      el.textContent = text;
-    }
-
-    function showModalMessage(text, type) {
-      const el = document.getElementById('msg-modal');
-      el.className = 'message ' + type;
-      el.textContent = text;
-    }
-
-    function clearModalMessage() {
-      const el = document.getElementById('msg-modal');
       el.className = 'message';
       el.textContent = '';
-    }
-
-    // Enter para enviar formularios
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        if (document.getElementById('modal-username').classList.contains('show')) {
-          confirmGoogleUsername();
-          return;
-        }
-        const activePanel = document.querySelector('.tab-panel.active').id;
-        if (activePanel === 'panel-login') handleLogin();
-        else handleRegister();
-      }
     });
+  }
 
-    document.querySelector('script[src*="gsi/client"]').addEventListener('load', initGoogleSignIn);
-  </script>
+  function showMessage(id, text, type) {
+    const el = document.getElementById(id);
+    el.className = 'message ' + type;
+    el.textContent = text;
+  }
+
+  async function handleLogin() {
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    if (!username || !password) {
+      showMessage('msg-login', 'Completa todos los campos.', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-login');
+    btn.disabled = true;
+    btn.textContent = 'Entrando...';
+    try {
+      const res = await fetch(`${AUTH_URL}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('username', data.username);
+        window.location.href = 'game.html';
+      } else {
+        showMessage('msg-login', data.error || 'Credenciales incorrectas.', 'error');
+      }
+    } catch (err) {
+      showMessage('msg-login', 'Error de conexión.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Entrar';
+    }
+  }
+
+  async function handleRegister() {
+    const username = document.getElementById('reg-username').value.trim();
+    const password = document.getElementById('reg-password').value;
+    if (!username || !password) {
+      showMessage('msg-register', 'Completa todos los campos.', 'error');
+      return;
+    }
+    if (password.length < 6) {
+      showMessage('msg-register', 'La contraseña debe tener al menos 6 caracteres.', 'error');
+      return;
+    }
+    const btn = document.getElementById('btn-register');
+    btn.disabled = true;
+    btn.textContent = 'Registrando...';
+    try {
+      const res = await fetch(`${AUTH_URL}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (res.status === 201) {
+        showMessage('msg-register', `¡Usuario "${data.username}" creado! Ahora inicia sesión.`, 'success');
+        document.getElementById('reg-username').value = '';
+        document.getElementById('reg-password').value = '';
+        setTimeout(() => switchTab('login'), 1500);
+      } else if (res.status === 409) {
+        showMessage('msg-register', 'El nombre de usuario ya existe.', 'error');
+      } else {
+        showMessage('msg-register', data.error || 'Error al registrar.', 'error');
+      }
+    } catch (err) {
+      showMessage('msg-register', 'Error de conexión.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Registrarse';
+    }
+  }
+
+  // Enter para enviar formularios
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (document.getElementById('modal-username').classList.contains('show')) {
+        confirmGoogleUsername();
+        return;
+      }
+      const activePanel = document.querySelector('.tab-panel.active').id;
+      if (activePanel === 'panel-login') handleLogin();
+      else handleRegister();
+    }
+  });
+</script>
 </body>
 </html>
