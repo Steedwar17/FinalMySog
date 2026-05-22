@@ -61,7 +61,8 @@ function normalizedErrorCode(payload) {
 }
 
 function isNotLeader(payload) {
-  return normalizedErrorCode(payload) === 'notleader';
+  const code = normalizedErrorCode(payload);
+  return code === 'notleader' || code === 'notdleader';
 }
 
 function isServerError(status) {
