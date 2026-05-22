@@ -293,6 +293,10 @@
           <span>Coordinador</span>
           <span id="coordinator-value">--</span>
         </div>
+        <div class="connection-meta">
+          <span>Auth</span>
+          <span id="auth-value">--</span>
+        </div>
       </div>
 
       <div class="panel-box">
@@ -331,6 +335,7 @@
 
     const API_URL = window.API_BASE_URL || '/api';
     const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (window.AUTH_URLS && window.AUTH_URLS[0]) || '--');
 
     window.lastState = null;
 
@@ -350,6 +355,7 @@
       const res = await fetch(`${API_URL}/coordinator`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      updateAuthFromResponse(res);
 
       const data = await res.json().catch(() => ({}));
 
@@ -374,6 +380,28 @@
       if (cleanUrl.startsWith('https://')) return 'wss://' + cleanUrl.slice('https://'.length);
       if (cleanUrl.startsWith('http://')) return 'ws://' + cleanUrl.slice('http://'.length);
       return cleanUrl;
+    }
+
+    function updateAuthFromResponse(res) {
+      const authUrl = res.headers.get('X-Auth-Url');
+      if (authUrl) setAuthDisplay(authUrl);
+    }
+
+    function setAuthDisplay(url) {
+      const el = document.getElementById('auth-value');
+      if (!el) return;
+      el.textContent = compactAuthLabel(url);
+      el.title = url || '';
+    }
+
+    function compactAuthLabel(url) {
+      if (!url || url === '--') return '--';
+      try {
+        const parsed = new URL(url);
+        return parsed.host;
+      } catch {
+        return url;
+      }
     }
 
     async function connect() {

@@ -1,20 +1,33 @@
 require('dotenv').config();
 const express = require('express');
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const AUTH_SERVICE_URL = (process.env.AUTH_SERVICE_URL || 'http://localhost:4000').trim();
+const AUTH_URLS = parseAuthUrls(process.env.AUTH_URLS || process.env.AUTH_SERVICE_URL || 'http://localhost:4000');
 const COORDINATOR_WS_URL = (process.env.COORDINATOR_WS_URL || '').trim();
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || '').trim();
+let lastHealthyAuthUrl = AUTH_URLS[0];
 
 app.use(express.json({ limit: '8kb' }));
 
-function authUrl(pathname) {
-  return new URL(pathname, AUTH_SERVICE_URL.replace(/\/+$/, '') + '/').toString();
+function parseAuthUrls(raw) {
+  const urls = String(raw || '')
+    .split(',')
+    .map((url) => normalizeBaseUrl(url))
+    .filter(Boolean);
+
+  return urls.length ? urls : ['http://localhost:4000'];
 }
 
-async function proxyToAuth(req, res, pathname, method = req.method) {
+function normalizeBaseUrl(url) {
+  return String(url || '').trim().replace(/\/+$/, '');
+}
+
+function authUrl(baseUrl, pathname) {
+  return new URL(pathname, `${baseUrl}/`).toString();
+}
+
+function buildProxyOptions(req, method) {
   const headers = {
     Accept: 'application/json',
   };
@@ -30,18 +43,112 @@ async function proxyToAuth(req, res, pathname, method = req.method) {
     options.body = JSON.stringify(req.body || {});
   }
 
-  try {
-    const upstream = await fetch(authUrl(pathname), options);
-    const contentType = upstream.headers.get('content-type') || 'application/json';
-    const body = await upstream.text();
+  return options;
+}
 
-    res.status(upstream.status);
-    res.setHeader('Content-Type', contentType);
-    res.send(body);
-  } catch (err) {
-    console.error(`[client] Error conectando con auth-service ${pathname}: ${err.message}`);
-    res.status(502).json({ error: 'No se pudo conectar con el servicio de autenticacion' });
+function tryParseJson(body) {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return null;
   }
+}
+
+function normalizedErrorCode(payload) {
+  return String((payload && (payload.error || payload.code)) || '')
+    .toLowerCase()
+    .replace(/[^a-z]/g, '');
+}
+
+function isNotLeader(payload) {
+  return normalizedErrorCode(payload) === 'notleader';
+}
+
+function isServerError(status) {
+  return status >= 500 && status <= 599;
+}
+
+function getLeaderUrl(payload) {
+  if (!payload) return '';
+  return payload.leaderUrl || payload.leaderURL || payload.leader_url || '';
+}
+
+async function proxyToAuth(req, res, pathname, method = req.method) {
+  const options = buildProxyOptions(req, method);
+  const attempted = [];
+  const tried = new Set();
+  let lastServerError = null;
+  let lastNetworkError = null;
+
+  async function tryAuth(baseUrl) {
+    const cleanBaseUrl = normalizeBaseUrl(baseUrl);
+    if (!cleanBaseUrl || tried.has(cleanBaseUrl)) return null;
+
+    tried.add(cleanBaseUrl);
+    attempted.push(cleanBaseUrl);
+
+    try {
+      const upstream = await fetch(authUrl(cleanBaseUrl, pathname), options);
+      const body = await upstream.text();
+      const payload = tryParseJson(body);
+
+      const rawLeaderUrl = getLeaderUrl(payload);
+      if (upstream.status === 503 && isNotLeader(payload) && rawLeaderUrl) {
+        const leaderUrl = normalizeBaseUrl(rawLeaderUrl);
+        const leaderResult = await tryAuth(leaderUrl);
+        if (leaderResult) return leaderResult;
+      }
+
+      if (isServerError(upstream.status)) {
+        lastServerError = {
+          baseUrl: cleanBaseUrl,
+          status: upstream.status,
+          contentType: upstream.headers.get('content-type') || 'application/json',
+          body,
+        };
+        return null;
+      }
+
+      return {
+        baseUrl: cleanBaseUrl,
+        status: upstream.status,
+        contentType: upstream.headers.get('content-type') || 'application/json',
+        body,
+      };
+    } catch (err) {
+      lastNetworkError = { baseUrl: cleanBaseUrl, err };
+      console.error(`[client] Error conectando con auth-service ${cleanBaseUrl}${pathname}: ${err.message}`);
+      return null;
+    }
+  }
+
+  for (const baseUrl of AUTH_URLS) {
+    const result = await tryAuth(baseUrl);
+    if (result) {
+      lastHealthyAuthUrl = result.baseUrl;
+      res.status(result.status);
+      res.setHeader('Content-Type', result.contentType);
+      res.setHeader('X-Auth-Url', result.baseUrl);
+      res.setHeader('X-Auth-Attempts', attempted.join(','));
+      res.send(result.body);
+      return;
+    }
+  }
+
+  if (lastServerError) {
+    res.status(lastServerError.status);
+    res.setHeader('Content-Type', lastServerError.contentType);
+    res.setHeader('X-Auth-Url', lastServerError.baseUrl);
+    res.setHeader('X-Auth-Attempts', attempted.join(','));
+    res.send(lastServerError.body);
+    return;
+  }
+
+  res.status(502).json({
+    error: 'No se pudo conectar con ningun servicio de autenticacion',
+    attemptedAuthUrls: attempted,
+    lastError: lastNetworkError ? lastNetworkError.err.message : null,
+  });
 }
 
 app.get('/config.js', (req, res) => {
@@ -50,6 +157,8 @@ app.get('/config.js', (req, res) => {
     window.API_BASE_URL       = ${JSON.stringify('/api')};
     window.COORDINATOR_WS_URL = ${JSON.stringify(COORDINATOR_WS_URL)};
     window.GOOGLE_CLIENT_ID   = ${JSON.stringify(GOOGLE_CLIENT_ID)};
+    window.AUTH_URLS          = ${JSON.stringify(AUTH_URLS)};
+    window.AUTH_ACTIVE_URL    = ${JSON.stringify(lastHealthyAuthUrl)};
   `);
 });
 

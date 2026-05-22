@@ -38,6 +38,18 @@
       font-size: 0.9rem;
     }
 
+    .auth-status {
+      text-align: center;
+      color: #777;
+      margin: -1.25rem 0 1.5rem;
+      font-size: 0.78rem;
+    }
+
+    .auth-status strong {
+      color: #aaa;
+      font-weight: 600;
+    }
+
     .tabs {
       display: flex;
       border-bottom: 2px solid #2a2a3e;
@@ -219,7 +231,8 @@
 
   <div class="container">
     <h1>🎮 Multijugador</h1>
-    <p class="subtitle">Sistemas Distribuidos - Taller 5</p>
+    <p class="subtitle">Sistemas Distribuidos - Taller 7</p>
+    <p class="auth-status">Auth: <strong id="auth-value">--</strong></p>
 
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('login')">Iniciar sesión</button>
@@ -290,6 +303,7 @@
     }
 
     const API_URL = window.API_BASE_URL || '/api';
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (window.AUTH_URLS && window.AUTH_URLS[0]) || '--');
 
     let pendingGoogleIdToken = null;
     let googleInitialized = false;
@@ -342,6 +356,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
         });
+        updateAuthFromResponse(res);
 
         const data = await res.json();
 
@@ -362,6 +377,7 @@
         }
 
       } catch (err) {
+        setAuthDisplay('sin respuesta');
         showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
       }
     }
@@ -416,6 +432,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
         });
+        updateAuthFromResponse(res);
 
         const data = await res.json();
 
@@ -427,6 +444,7 @@
           showMessage('msg-login', data.error || data.message || 'Credenciales incorrectas.', 'error');
         }
       } catch (err) {
+        setAuthDisplay('sin respuesta');
         showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
       } finally {
         btn.disabled = false;
@@ -454,6 +472,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
         });
+        updateAuthFromResponse(res);
 
         const data = await res.json();
 
@@ -468,6 +487,7 @@
           showMessage('msg-register', data.error || data.message || 'Error al registrar.', 'error');
         }
       } catch (err) {
+        setAuthDisplay('sin respuesta');
         showMessage('msg-register', 'No se pudo conectar con el servidor de autenticación.', 'error');
       } finally {
         btn.disabled = false;
@@ -497,6 +517,28 @@
       const el = document.getElementById(id);
       el.className = 'message ' + type;
       el.textContent = text;
+    }
+
+    function updateAuthFromResponse(res) {
+      const authUrl = res.headers.get('X-Auth-Url');
+      if (authUrl) setAuthDisplay(authUrl);
+    }
+
+    function setAuthDisplay(url) {
+      const el = document.getElementById('auth-value');
+      if (!el) return;
+      el.textContent = compactAuthLabel(url);
+      el.title = url || '';
+    }
+
+    function compactAuthLabel(url) {
+      if (!url || url === '--') return '--';
+      try {
+        const parsed = new URL(url);
+        return parsed.host;
+      } catch {
+        return url;
+      }
     }
 
     function showModalMessage(text, type) {

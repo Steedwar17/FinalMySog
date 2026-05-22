@@ -94,6 +94,11 @@
     #status-text { color: #aaa; }
 
     .coordinator-badge {
+      color: #777;
+      font-size: 0.8rem;
+    }
+
+    .auth-badge {
       margin-left: auto;
       color: #777;
       font-size: 0.8rem;
@@ -216,6 +221,7 @@
     <div class="status-bar">
       <div class="status-dot connecting" id="status-dot"></div>
       <span id="status-text">Conectando al servidor...</span>
+      <span class="auth-badge">Auth: <strong id="auth-value">--</strong></span>
       <span class="coordinator-badge">Coordinador: <strong id="coordinator-value">--</strong></span>
     </div>
 
@@ -245,6 +251,7 @@
     document.getElementById('current-username').textContent = '👤 ' + (username || '...');
     const API_URL = window.API_BASE_URL || '/api';
     const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (window.AUTH_URLS && window.AUTH_URLS[0]) || '--');
     let ws = null;
     let reconnectTimer = null;
     let manualClose = false;
@@ -253,6 +260,7 @@
       const res = await fetch(`${API_URL}/coordinator`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      updateAuthFromResponse(res);
 
       const data = await res.json().catch(() => ({}));
 
@@ -277,6 +285,28 @@
       if (cleanUrl.startsWith('https://')) return 'wss://' + cleanUrl.slice('https://'.length);
       if (cleanUrl.startsWith('http://')) return 'ws://' + cleanUrl.slice('http://'.length);
       return cleanUrl;
+    }
+
+    function updateAuthFromResponse(res) {
+      const authUrl = res.headers.get('X-Auth-Url');
+      if (authUrl) setAuthDisplay(authUrl);
+    }
+
+    function setAuthDisplay(url) {
+      const el = document.getElementById('auth-value');
+      if (!el) return;
+      el.textContent = compactAuthLabel(url);
+      el.title = url || '';
+    }
+
+    function compactAuthLabel(url) {
+      if (!url || url === '--') return '--';
+      try {
+        const parsed = new URL(url);
+        return parsed.host;
+      } catch {
+        return url;
+      }
     }
 
     async function connect() {
