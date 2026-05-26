@@ -319,8 +319,41 @@ function handlePeerMessage(msg, ws) {
 }
 
 // ── Servidor WS para peers ─────────────────────────────────────────────────
-const peerServer = new WebSocketServer({ port: PEER_PORT });
-console.log(`[auth] Mesh WS escuchando en puerto ${PEER_PORT}`);
+// ── Servidor HTTP + WS para peers ─────────────────────────────────────────
+const httpServer = http.createServer(app);
+const peerServer = new WebSocketServer({ server: httpServer });
+console.log(`[auth] Mesh WS compartiendo puerto ${PORT}`);
+
+peerServer.on('connection', (ws) => {
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      handlePeerMessage(msg, ws);
+      if (msg.authId && !peers.has(msg.authId)) {
+        peers.set(msg.authId, ws);
+      }
+    } catch(e) {}
+  });
+
+  ws.on('close', () => {
+    for (const [id, sock] of peers.entries()) {
+      if (sock === ws) {
+        peers.delete(id);
+        console.log(`[auth] Peer desconectado: ${id}`);
+        break;
+      }
+    }
+  });
+
+  // Handshake
+  ws.send(JSON.stringify({
+    type: 'hello',
+    authId: AUTH_ID,
+    role,
+    term: currentTerm,
+    lastSeq: getLastSeq(),
+  }));
+});
 
 peerServer.on('connection', (ws) => {
   ws.on('message', (raw) => {
@@ -609,7 +642,7 @@ app.use((_req, res) => {
 });
 
 // ── Arrancar ───────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`[auth] ${AUTH_ID} corriendo en puerto ${PORT} — rol inicial: ${role}`);
   console.log(`[auth] CORS: ${process.env.CORS_ORIGINS}`);
 });
