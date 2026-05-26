@@ -258,7 +258,10 @@
 
     async function discoverCoordinator() {
       const res = await fetch(`${API_URL}/coordinator`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'ngrok-skip-browser-warning': 'true',
+        }
       });
       updateAuthFromResponse(res);
 

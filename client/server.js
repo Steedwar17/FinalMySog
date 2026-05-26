@@ -9,6 +9,10 @@ const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || '').trim();
 let lastHealthyAuthUrl = AUTH_URLS[0];
 
 app.use(express.json({ limit: '8kb' }));
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  next();
+});
 
 function parseAuthUrls(raw) {
   const urls = String(raw || '')
@@ -30,6 +34,7 @@ function authUrl(baseUrl, pathname) {
 function buildProxyOptions(req, method) {
   const headers = {
     Accept: 'application/json',
+    'ngrok-skip-browser-warning': 'true',
   };
 
   if (req.headers.authorization) {

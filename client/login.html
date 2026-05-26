@@ -303,10 +303,32 @@
     }
 
     const API_URL = window.API_BASE_URL || '/api';
-    setAuthDisplay(window.AUTH_ACTIVE_URL || (window.AUTH_URLS && window.AUTH_URLS[0]) || '--');
+    const AUTH_URLS = window.AUTH_URLS || [];
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (AUTH_URLS[0]) || '--');
 
     let pendingGoogleIdToken = null;
     let googleInitialized = false;
+
+    async function requestAuth(endpoint, method, body) {
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      updateAuthFromResponse(res);
+      return res;
+    }
+
+    async function readJson(res) {
+      try {
+        return await res.json();
+      } catch {
+        return {};
+      }
+    }
 
     window.addEventListener('load', () => {
       if (typeof google === 'undefined') return;
@@ -351,14 +373,8 @@
       if (username) body.username = username;
 
       try {
-        const res = await fetch(`${API_URL}/auth/google`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-        updateAuthFromResponse(res);
-
-        const data = await res.json();
+        const res = await requestAuth('/auth/google', 'POST', body);
+        const data = await readJson(res);
 
         if (res.ok) {
           localStorage.setItem('token', data.token);
@@ -427,14 +443,8 @@
       btn.textContent = 'Entrando...';
 
       try {
-        const res = await fetch(`${API_URL}/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        updateAuthFromResponse(res);
-
-        const data = await res.json();
+        const res = await requestAuth('/login', 'POST', { username, password });
+        const data = await readJson(res);
 
         if (res.ok) {
           localStorage.setItem('token', data.token);
@@ -452,7 +462,6 @@
       }
     }
 
-    //local register
     async function handleRegister() {
       const username = document.getElementById('reg-username').value.trim();
       const password = document.getElementById('reg-password').value;
@@ -467,14 +476,8 @@
       btn.textContent = 'Registrando...';
 
       try {
-        const res = await fetch(`${API_URL}/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        updateAuthFromResponse(res);
-
-        const data = await res.json();
+        const res = await requestAuth('/register', 'POST', { username, password });
+        const data = await readJson(res);
 
         if (res.status === 201) {
           showMessage('msg-register', `¡Usuario "${data.username}" creado! Ahora inicia sesión.`, 'success');

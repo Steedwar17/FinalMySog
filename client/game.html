@@ -335,7 +335,8 @@
 
     const API_URL = window.API_BASE_URL || '/api';
     const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
-    setAuthDisplay(window.AUTH_ACTIVE_URL || (window.AUTH_URLS && window.AUTH_URLS[0]) || '--');
+    const AUTH_URLS = window.AUTH_URLS || [];
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (AUTH_URLS[0]) || '--');
 
     window.lastState = null;
 
@@ -351,27 +352,48 @@
     let manualClose = false;
     let currentCoordinator = null;
 
+    async function readJson(res) {
+      try {
+        return await res.json();
+      } catch {
+        return {};
+      }
+    }
+
     async function discoverCoordinator() {
-      const res = await fetch(`${API_URL}/coordinator`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      updateAuthFromResponse(res);
+      try {
+        const res = await fetch(`${API_URL}/coordinator`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'ngrok-skip-browser-warning': 'true',
+          }
+        });
+        updateAuthFromResponse(res);
 
-      const data = await res.json().catch(() => ({}));
+        const data = await readJson(res);
 
-      if (!res.ok) {
-        throw new Error(data.error || data.message || 'No hay coordinadores disponibles.');
+        if (!res.ok) {
+          throw new Error(data.error || data.message || 'No hay coordinadores disponibles.');
+        }
+
+        const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
+        if (!publicUrl) {
+          throw new Error('El directorio no devolvió una URL de coordinador.');
+        }
+
+        return {
+          coordinatorId: data.coordinatorId || data.id || 'desconocido',
+          wsUrl: toWebSocketUrl(publicUrl)
+        };
+      } catch (err) {
+        if (!FALLBACK_COORDINATOR_WS) {
+          throw err;
+        }
+        return {
+          coordinatorId: 'fallback',
+          wsUrl: FALLBACK_COORDINATOR_WS
+        };
       }
-
-      const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
-      if (!publicUrl) {
-        throw new Error('El directorio no devolvió una URL de coordinador.');
-      }
-
-      return {
-        coordinatorId: data.coordinatorId || data.id || 'desconocido',
-        wsUrl: toWebSocketUrl(publicUrl)
-      };
     }
 
     function toWebSocketUrl(url) {
