@@ -181,7 +181,14 @@ function becomeLeader() {
 }
 
 function startElection() {
-  
+  // Si no hay peers activos, ser líder directamente
+  const activePeers = Array.from(peers.values()).filter(ws => ws.readyState === WebSocket.OPEN);
+  if (activePeers.length === 0) {
+    console.log(`[auth] Sin peers activos — convirtiéndome en líder directamente`);
+    becomeLeader();
+    return;
+  }
+
   currentTerm++;
   role = 'replica';
   leaderUrl = null;
@@ -370,10 +377,15 @@ app.get('/status', (_req, res) => {
 });
 
 app.get('/peers', (_req, res) => {
-  const authPeers = Array.from(peerInfo.values()).map(p => ({
-    authId: p.authId, publicUrl: p.publicUrl || null, peerUrl: p.peerUrl || null, role: p.role,
-  }));
-  res.json({ peers: authPeers });
+  console.log('[PEERS] consultado, coordinadores:', coordinators.size);
+  const now = Date.now();
+  const alive = Array.from(coordinators.values())
+    .filter(c => now - c.lastSeen < 6000)
+    .map(c => ({
+      coordinatorId: c.coordinatorId,
+      peerUrl: c.peerUrl,
+    }));
+  res.json({ peers: alive });
 });
 
 app.get('/health', (_req, res) => {
