@@ -168,6 +168,13 @@ app.get('/config.js', (req, res) => {
   `);
 });
 
+app.get('/api/auth/status', (req, res) => {
+  res.json({
+    activeUrl: lastHealthyAuthUrl,
+    authUrls: AUTH_URLS,
+  });
+});
+
 app.post('/api/register', (req, res) => proxyToAuth(req, res, '/register', 'POST'));
 app.post('/api/login', (req, res) => proxyToAuth(req, res, '/login', 'POST'));
 app.post('/api/auth/google', (req, res) => proxyToAuth(req, res, '/auth/google', 'POST'));

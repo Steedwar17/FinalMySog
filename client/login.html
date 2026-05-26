@@ -308,6 +308,27 @@
 
     let pendingGoogleIdToken = null;
     let googleInitialized = false;
+    let authStatusInFlight = false;
+
+    async function refreshAuthStatus() {
+      if (authStatusInFlight) return;
+      authStatusInFlight = true;
+      try {
+        const res = await fetch(`${API_URL}/auth/status`, {
+          headers: { 'ngrok-skip-browser-warning': 'true' }
+        });
+        const data = await readJson(res);
+        if (res.ok && data.activeUrl) {
+          setAuthDisplay(data.activeUrl);
+        }
+      } catch {
+        // Keep the last visible auth if the status probe fails.
+      } finally {
+        authStatusInFlight = false;
+      }
+    }
+
+    setInterval(refreshAuthStatus, 1000);
 
     async function requestAuth(endpoint, method, body) {
       const res = await fetch(`${API_URL}${endpoint}`, {

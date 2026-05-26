@@ -255,6 +255,27 @@
     let ws = null;
     let reconnectTimer = null;
     let manualClose = false;
+    let authRefreshInFlight = false;
+
+    async function refreshAuthLeader() {
+      if (authRefreshInFlight) return;
+      authRefreshInFlight = true;
+      try {
+        const res = await fetch(`${API_URL}/coordinator`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'ngrok-skip-browser-warning': 'true',
+          }
+        });
+        updateAuthFromResponse(res);
+      } catch {
+        // Keep the last visible auth if the refresh fails.
+      } finally {
+        authRefreshInFlight = false;
+      }
+    }
+
+    setInterval(refreshAuthLeader, 1000);
 
     async function discoverCoordinator() {
       const res = await fetch(`${API_URL}/coordinator`, {
