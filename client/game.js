@@ -98,8 +98,6 @@ export function createGame(config) {
   canvas.width = opts.worldWidth;
   canvas.height = opts.worldHeight;
   const ctx = canvas.getContext('2d');
-  const renderedPlayers = new Map();
-  let lastFrameTime = performance.now();
 
   // --- Input handling ---
   const keys = new Set();
@@ -210,42 +208,13 @@ export function createGame(config) {
   }
 
   function render() {
-    const now = performance.now();
-    const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
-    lastFrameTime = now;
-
     const state = getRenderState();
     drawBackground();
 
     if (!state || !Array.isArray(state.players)) return;
 
-    const visibleIds = new Set();
-    const smoothedPlayers = state.players.map((p) => {
-      visibleIds.add(p.userId);
-
-      const previous = renderedPlayers.get(p.userId);
-      if (!previous) {
-        renderedPlayers.set(p.userId, { x: p.x, y: p.y });
-        return p;
-      }
-
-      const responsiveness = p.userId === localPlayerId ? 28 : 18;
-      const alpha = 1 - Math.exp(-responsiveness * dt);
-      previous.x += (p.x - previous.x) * alpha;
-      previous.y += (p.y - previous.y) * alpha;
-
-      if (Math.abs(p.x - previous.x) < 0.05) previous.x = p.x;
-      if (Math.abs(p.y - previous.y) < 0.05) previous.y = p.y;
-
-      return { ...p, x: previous.x, y: previous.y };
-    });
-
-    for (const userId of renderedPlayers.keys()) {
-      if (!visibleIds.has(userId)) renderedPlayers.delete(userId);
-    }
-
     // Ordenar para que el local quede arriba (se ve sobre los demás)
-    const sorted = smoothedPlayers.sort((a, b) => {
+    const sorted = [...state.players].sort((a, b) => {
       if (a.userId === localPlayerId) return 1;
       if (b.userId === localPlayerId) return -1;
       return 0;

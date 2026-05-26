@@ -45,6 +45,7 @@
       font-weight: 600;
     }
 
+    /* Selector de equipo */
     .team-selector {
       display: flex;
       align-items: center;
@@ -195,6 +196,11 @@
       font-size: 0.82rem;
     }
 
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
     .player-dot {
       width: 10px; height: 10px;
       border-radius: 50%;
@@ -248,381 +254,476 @@
 </head>
 <body>
 
-<header>
-  <div class="logo">🎮 Multijugador</div>
-  <div class="header-right">
-    <span class="user-badge" id="current-username">...</span>
-    <div class="team-selector">
-      <span>Equipo:</span>
-      <button class="btn-team red"  id="btn-red"  onclick="selectTeam('red')">🔴 Rojos</button>
-      <button class="btn-team blue" id="btn-blue" onclick="selectTeam('blue')">🔵 Azules</button>
-    </div>
-    <button class="btn-logout" onclick="logout()">Cerrar sesión</button>
-  </div>
-</header>
+  <header>
+    <div class="logo">🎮 Multijugador</div>
+    <div class="header-right">
+      <span class="user-badge" id="current-username">...</span>
 
-<div class="alert-box" id="alert-box"></div>
+      <div class="team-selector">
+        <span>Equipo:</span>
+        <button class="btn-team red"  id="btn-red"  onclick="selectTeam('red')">🔴 Rojos</button>
+        <button class="btn-team blue" id="btn-blue" onclick="selectTeam('blue')">🔵 Azules</button>
+      </div>
 
-<main>
-  <div class="canvas-wrapper">
-    <canvas id="game-canvas"></canvas>
-    <p class="controls-hint">Mover: WASD o flechas</p>
-  </div>
-  <div class="side-panel">
-    <div class="panel-box">
-      <h3>Conexión</h3>
-      <div class="status-bar">
-        <div class="status-dot connecting" id="status-dot"></div>
-        <span id="status-text">Conectando...</span>
-      </div>
-      <div class="connection-meta">
-        <span>Coordinador:</span>
-        <span id="coordinator-id">--</span>
-      </div>
-      <div class="connection-meta">
-        <span>Ping</span>
-        <span id="ping-value">-- ms</span>
-      </div>
+      <button class="btn-logout" onclick="logout()">Cerrar sesión</button>
     </div>
-    <div class="panel-box">
-      <h3>Marcador</h3>
-      <div class="scoreboard">
-        <div class="score-team">
-          <span class="score-label red">🔴 Rojos</span>
-          <span class="score-count" id="score-red">0</span>
+  </header>
+
+  <div class="alert-box" id="alert-box"></div>
+
+  <main>
+    <div class="canvas-wrapper">
+      <canvas id="game-canvas"></canvas>
+      <p class="controls-hint">Mover: WASD o flechas</p>
+    </div>
+
+    <div class="side-panel">
+      <!-- Estado de conexión -->
+      <div class="panel-box">
+        <h3>Conexión</h3>
+        <div class="status-bar">
+          <div class="status-dot connecting" id="status-dot"></div>
+          <span id="status-text">Conectando...</span>
         </div>
-        <div class="score-team">
-          <span class="score-label blue">🔵 Azules</span>
-          <span class="score-count" id="score-blue">0</span>
+        <div class="connection-meta">
+          <span>Ping</span>
+          <span id="ping-value">-- ms</span>
+        </div>
+        <div class="connection-meta">
+          <span>Coordinador</span>
+          <span id="coordinator-value">--</span>
+        </div>
+        <div class="connection-meta">
+          <span>Auth</span>
+          <span id="auth-value">--</span>
         </div>
       </div>
+
+      <div class="panel-box">
+        <h3>Marcador</h3>
+        <div class="scoreboard">
+          <div class="score-team">
+            <span class="score-label red">🔴 Rojos</span>
+            <span class="score-count" id="score-red">0</span>
+          </div>
+          <div class="score-team">
+            <span class="score-label blue">🔵 Azules</span>
+            <span class="score-count" id="score-blue">0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <h3>Jugadores (<span id="player-count">0</span>)</h3>
+        <ul id="players-list"></ul>
+      </div>
     </div>
-    <div class="panel-box">
-      <h3>Jugadores (<span id="player-count">0</span>)</h3>
-      <ul id="players-list"></ul>
-    </div>
-  </div>
-</main>
+  </main>
 
-<script src="/config.js"></script>
-<script type="module">
-  import { createGame } from './game.js';
+  <script src="/config.js"></script>
+  <script type="module">
+    import { createGame } from './game.js';
 
-  // --- Elementos DOM y variables globales ---
-  const token    = localStorage.getItem('token');
-  const username = localStorage.getItem('username');
+    const token    = localStorage.getItem('token');
+    const username = localStorage.getItem('username');
 
-  if (!token) {
-    window.location.href = 'login.html';
-  }
-
-  document.getElementById('current-username').textContent = '👤 ' + (username || '...');
-
-  window.lastState = null;
-  let myUserId   = null;
-  let myTeam     = null;
-  let ws         = null;
-  let game       = null;
-  let lastPlayersPanelKey = '';
-  let lastPanelSignature = '';
-  const playersPanelCache = new Map();
-  let pingTimer  = null;
-
-  // --- Funciones auxiliares (UI, ping, etc.) ---
-  function setStatus(state, text) {
-    const dot = document.getElementById('status-dot');
-    dot.className = 'status-dot ' + state;
-    document.getElementById('status-text').textContent = text;
-  }
-
-  function showAlert(msg) {
-    const el = document.getElementById('alert-box');
-    el.textContent = msg;
-    el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 4000);
-  }
-
-  function escapeHtml(text) {
-    const d = document.createElement('div');
-    d.appendChild(document.createTextNode(text));
-    return d.innerHTML;
-  }
-
-  function setTextIfChanged(el, text) {
-    if (el.textContent !== text) el.textContent = text;
-  }
-
-  function startPingMonitor() {
-    stopPingMonitor();
-    sendPing();
-    pingTimer = setInterval(sendPing, 1000);
-  }
-
-  function stopPingMonitor() {
-    if (pingTimer) {
-      clearInterval(pingTimer);
-      pingTimer = null;
+    if (!token) {
+      window.location.href = 'login.html';
     }
-    document.getElementById('ping-value').textContent = '-- ms';
-  }
 
-  function sendPing() {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'ping', sentAt: performance.now() }));
-    }
-  }
+    document.getElementById('current-username').textContent = '👤 ' + (username || '...');
 
-  function updatePing(sentAt) {
-    if (typeof sentAt !== 'number') return;
-    const ping = Math.max(0, Math.round(performance.now() - sentAt));
-    document.getElementById('ping-value').textContent = `${ping} ms`;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'latency_update', ping }));
-    }
-  }
+    const API_URL = window.API_BASE_URL || '/api';
+    const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (window.AUTH_URLS && window.AUTH_URLS[0]) || '--');
 
-  function teamColor(team) {
-    if (team === 'red')  return '#ff4444';
-    if (team === 'blue') return '#4466ff';
-    return null;
-  }
+    window.lastState = null;
 
-  function initGame(world) {
-    game = createGame({
-      canvas: document.getElementById('game-canvas'),
-      onIntent: (intent) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'intent', intent }));
-        }
-      },
-      getRenderState: () => window.lastState,
-      localPlayerId: myUserId,
-      options: {
-        worldWidth:   world.width        || 800,
-        worldHeight:  world.height       || 600,
-        playerRadius: world.playerRadius || 20,
+    let myUserId   = null;
+    let myTeam     = null; 
+    let ws         = null;
+    let game       = null;
+    let lastPlayersPanelKey = '';
+    let lastPanelSignature = '';
+    const playersPanelCache = new Map();
+    let pingTimer  = null;
+    let reconnectTimer = null;
+    let manualClose = false;
+    let currentCoordinator = null;
+
+    async function discoverCoordinator() {
+      const res = await fetch(`${API_URL}/coordinator`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      updateAuthFromResponse(res);
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'No hay coordinadores disponibles.');
       }
-    });
-    game.start();
-  }
 
-  // --- Actualización del panel y manejo de colores ---
-  function receivePlayersUpdate(players) {
-    const mergedPlayers = players.map(p => {
-      const previous = playersPanelCache.get(p.userId) || {};
-      const merged = {
-        ...previous,
-        ...p,
-        extras: {
-          ...(previous.extras || {}),
-          ...(p.extras || {})
+      const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
+      if (!publicUrl) {
+        throw new Error('El directorio no devolvió una URL de coordinador.');
+      }
+
+      return {
+        coordinatorId: data.coordinatorId || data.id || 'desconocido',
+        wsUrl: toWebSocketUrl(publicUrl)
+      };
+    }
+
+    function toWebSocketUrl(url) {
+      const cleanUrl = url.replace(/\/+$/, '');
+      if (cleanUrl.startsWith('ws://') || cleanUrl.startsWith('wss://')) return cleanUrl;
+      if (cleanUrl.startsWith('https://')) return 'wss://' + cleanUrl.slice('https://'.length);
+      if (cleanUrl.startsWith('http://')) return 'ws://' + cleanUrl.slice('http://'.length);
+      return cleanUrl;
+    }
+
+    function updateAuthFromResponse(res) {
+      const authUrl = res.headers.get('X-Auth-Url');
+      if (authUrl) setAuthDisplay(authUrl);
+    }
+
+    function setAuthDisplay(url) {
+      const el = document.getElementById('auth-value');
+      if (!el) return;
+      el.textContent = compactAuthLabel(url);
+      el.title = url || '';
+    }
+
+    function compactAuthLabel(url) {
+      if (!url || url === '--') return '--';
+      try {
+        const parsed = new URL(url);
+        return parsed.host;
+      } catch {
+        return url;
+      }
+    }
+
+    async function connect() {
+      setStatus('connecting', 'Buscando coordinador...');
+      clearReconnectTimer();
+
+      let target;
+      try {
+        target = await discoverCoordinator();
+      } catch (err) {
+        if (!FALLBACK_COORDINATOR_WS) {
+          setStatus('disconnected', 'Sin coordinador disponible');
+          showAlert(err.message);
+          scheduleReconnect();
+          return;
+        }
+        target = {
+          coordinatorId: 'fallback',
+          wsUrl: FALLBACK_COORDINATOR_WS
+        };
+      }
+
+      currentCoordinator = target;
+      document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      setStatus('connecting', `Conectando a ${target.coordinatorId}...`);
+
+      ws = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
+
+      ws.onopen = () => {
+        setStatus('connected', 'Conectado');
+        hideAlert();
+        startPingMonitor();
+      };
+
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+
+        if (msg.type === 'pong') {
+          updatePing(msg.sentAt);
+          return;
+        }
+
+        if (msg.type === 'welcome') {
+          myUserId = msg.you.userId;
+          initGame(msg.world);
+          return;
+        }
+        if (msg.type === 'state') {
+          const enriched = {
+            ...msg,
+            players: msg.players.map(p => ({
+              ...p,
+              extras: {
+                ...(p.extras || {}),
+                color: teamColor(p.extras && p.extras.team)
+              }
+            }))
+          };
+
+          window.lastState = enriched;
+          receivePlayersUpdate(msg.players);
+          return;
+        }
+        if (msg.type === 'players_update') {
+          receivePlayersUpdate(msg.players);
+          return;
         }
       };
-      playersPanelCache.set(p.userId, merged);
-      return merged;
-    });
 
-    const visibleIds = new Set(mergedPlayers.map(p => p.userId));
-    for (const userId of playersPanelCache.keys()) {
-      if (!visibleIds.has(userId)) playersPanelCache.delete(userId);
-    }
+      ws.onclose = (event) => {
+        setStatus('disconnected', 'Desconectado');
+        stopPingMonitor();
 
-    const signature = mergedPlayers.map(p => {
-      const team = (p.extras && p.extras.team) || '';
-      const ping = Number.isFinite(p.ping) ? p.ping : '';
-      return `${p.userId}:${p.username}:${team}:${ping}:${p.userId === myUserId}`;
-    }).join('|');
+        if (game) { game.stop(); }
 
-    if (signature === lastPanelSignature) return;
-    lastPanelSignature = signature;
-    updateSidePanel(mergedPlayers);
-  }
+        if (manualClose) return;
 
-  function updateSidePanel(players) {
-    const list     = document.getElementById('players-list');
-    const countEl  = document.getElementById('player-count');
-    const scoreRed = document.getElementById('score-red');
-    const scoreBlu = document.getElementById('score-blue');
-
-    setTextIfChanged(countEl, String(players.length));
-
-    let reds = 0, blues = 0;
-    players.forEach(p => {
-      const team = p.extras && p.extras.team;
-      if (team === 'red')  reds++;
-      if (team === 'blue') blues++;
-    });
-    setTextIfChanged(scoreRed, String(reds));
-    setTextIfChanged(scoreBlu, String(blues));
-
-    const panelKey = players.map(p => `${p.userId}:${p.username}:${p.userId === myUserId}`).join('|');
-    if (panelKey === lastPlayersPanelKey) {
-      updatePlayerPings(players);
-      return;
-    }
-    lastPlayersPanelKey = panelKey;
-
-    if (players.length === 0) {
-      lastPlayersPanelKey = '';
-      list.innerHTML = '<li style="color:#555;font-size:0.8rem">Sin jugadores</li>';
-      return;
-    }
-
-    list.innerHTML = players.map(p => {
-      const team  = (p.extras && p.extras.team) || null;
-      const color = teamColor(team) || '#7b68ee';
-      const isMe  = p.userId === myUserId;
-      const ping  = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
-      const tag   = team
-        ? `<span class="team-tag ${team}">${team === 'red' ? '🔴' : '🔵'}</span>`
-        : `<span class="team-tag none">—</span>`;
-      return `
-        <li class="player-item" data-user-id="${String(p.userId)}">
-          <div class="player-dot" style="background:${color}"></div>
-          <span class="player-name">${escapeHtml(p.username)}${isMe ? ' <small style="color:#7b68ee">(tú)</small>' : ''}</span>
-          <span class="player-ping">${ping}</span>
-          ${tag}
-        </li>`;
-    }).join('');
-  }
-
-  function updatePlayerPings(players) {
-    players.forEach(p => {
-      const item = document.querySelector(`[data-user-id="${CSS.escape(String(p.userId))}"]`);
-      if (!item) return;
-      const team = (p.extras && p.extras.team) || null;
-      const color = teamColor(team) || '#7b68ee';
-      const isMe = p.userId === myUserId;
-      const ping = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
-      const tag = item.querySelector('.team-tag');
-      item.querySelector('.player-dot').style.background = color;
-      setTextIfChanged(item.querySelector('.player-name'), `${p.username}${isMe ? ' (tu)' : ''}`);
-      setTextIfChanged(item.querySelector('.player-ping'), ping);
-      if (tag) {
-        tag.className = `team-tag ${team || 'none'}`;
-        setTextIfChanged(tag, team === 'red' ? 'R' : team === 'blue' ? 'A' : '-');
-      }
-    });
-  }
-
-  // --- Cambio de equipo (con actualización local inmediata) ---
-  window.selectTeam = function(team) {
-    myTeam = team;
-    // Actualizar botones visualmente
-    document.getElementById('btn-red').classList.toggle('active', team === 'red');
-    document.getElementById('btn-blue').classList.toggle('active', team === 'blue');
-
-    // Enviar al servidor
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'extras_update',
-        extras: { team: team }
-      }));
-    }
-
-    // Cambio local inmediato en el estado del juego para que el círculo cambie de color
-    if (window.lastState && window.lastState.players) {
-      const localPlayer = window.lastState.players.find(p => p.userId === myUserId);
-      if (localPlayer) {
-        localPlayer.extras = localPlayer.extras || {};
-        localPlayer.extras.team = team;
-        localPlayer.extras.color = teamColor(team);
-        // Forzar actualización del panel
-        receivePlayersUpdate(window.lastState.players);
-      }
-    }
-  };
-
-  window.logout = function() {
-    if (game) game.destroy();
-    stopPingMonitor();
-    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-    localStorage.removeItem('token');
-    localStorage.removeItem('username');
-    window.location.href = 'login.html';
-  };
-
-  // --- Lógica de conexión (sin async/await) ---
-  function connectWebSocket(coordinatorUrl) {
-    // Forzar ws:// si la URL viene con wss:// (para desarrollo local)
-    let finalUrl = coordinatorUrl;
-    if (finalUrl.startsWith('wss://')) {
-      finalUrl = 'ws://' + finalUrl.slice(6);
-    }
-    console.log('[WS] Conectando a', finalUrl);
-    ws = new WebSocket(`${finalUrl}/connect?token=${token}`);
-
-    ws.onopen = () => {
-      setStatus('connected', 'Conectado');
-      startPingMonitor();
-    };
-
-    ws.onmessage = (event) => {
-      let msg;
-      try { msg = JSON.parse(event.data); } catch { return; }
-      if (msg.type === 'pong') {
-        updatePing(msg.sentAt);
-      } else if (msg.type === 'welcome') {
-        myUserId = msg.you.userId;
-        initGame(msg.world);
-      } else if (msg.type === 'state') {
-        // Asegurar que cada jugador tenga su color en base al equipo
-        const playersWithColor = msg.players.map(p => {
-          const team = p.extras && p.extras.team;
-          return {
-            ...p,
-            extras: {
-              ...(p.extras || {}),
-              color: teamColor(team)
-            }
-          };
-        });
-        window.lastState = { ...msg, players: playersWithColor };
-        receivePlayersUpdate(msg.players); // pasar los originales, pero receivePlayersUpdate extraerá el team
-      } else if (msg.type === 'players_update') {
-        receivePlayersUpdate(msg.players);
-      }
-    };
-
-    ws.onclose = (event) => {
-      setStatus('disconnected', 'Desconectado');
-      stopPingMonitor();
-      if (game) game.stop();
-      const reason = (event.code === 4001) ? 'Token inválido o vencido.' : 'Conexión perdida.';
-      showAlert(reason + ' Reintentando en 3 segundos...');
-      setTimeout(fetchCoordinatorAndConnect, 3000);
-    };
-
-    ws.onerror = () => {
-      setStatus('disconnected', 'Error de conexión');
-      stopPingMonitor();
-    };
-  }
-
-  function fetchCoordinatorAndConnect() {
-    setStatus('connecting', 'Obteniendo coordinador...');
-    const authUrl = window.AUTH_SERVICE_URL || 'http://localhost:4000';
-    fetch(authUrl + '/coordinator')
-      .then(function(response) {
-        if (!response.ok) {
-          throw new Error('HTTP ' + response.status);
+        if (event.code === 4001) {
+          showAlert('Token inválido o vencido. Volviendo al login...');
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          setTimeout(() => { window.location.href = 'login.html'; }, 2500);
+          return;
         }
-        return response.json();
-      })
-      .then(function(data) {
-        console.log('Coordinador asignado:', data.coordinatorId, data.publicUrl);
-        document.getElementById('coordinator-id').textContent = data.coordinatorId;
-        connectWebSocket(data.publicUrl);
-      })
-      .catch(function(err) {
-        console.error('Error obteniendo coordinador:', err);
-        showAlert('No se pudo obtener un coordinador. Reintentando en 5 segundos...');
-        setTimeout(fetchCoordinatorAndConnect, 5000);
-      });
-  }
 
-  // --- Inicio ---
-  fetchCoordinatorAndConnect();
-</script>
+        showAlert('Conexión perdida con el coordinador. Buscando otro disponible...');
+        scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        setStatus('disconnected', 'Error de conexión');
+        stopPingMonitor();
+      };
+    }
+
+    function startPingMonitor() {
+      stopPingMonitor();
+      sendPing();
+      pingTimer = setInterval(sendPing, 1000);
+    }
+
+    function stopPingMonitor() {
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+      document.getElementById('ping-value').textContent = '-- ms';
+    }
+
+    function scheduleReconnect() {
+      clearReconnectTimer();
+      reconnectTimer = setTimeout(() => {
+        connect();
+      }, 1800);
+    }
+
+    function clearReconnectTimer() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
+
+    function sendPing() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'ping', sentAt: performance.now() }));
+    }
+
+    function updatePing(sentAt) {
+      if (typeof sentAt !== 'number') return;
+      const ping = Math.max(0, Math.round(performance.now() - sentAt));
+      document.getElementById('ping-value').textContent = `${ping} ms`;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'latency_update', ping }));
+      }
+    }
+
+    function initGame(world) {
+      if (game) {
+        game.destroy();
+      }
+
+      game = createGame({
+        canvas: document.getElementById('game-canvas'),
+        onIntent: (intent) => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'intent', intent }));
+          }
+        },
+        getRenderState: () => window.lastState,
+
+        localPlayerId: myUserId,
+
+        options: {
+          worldWidth:   world.width        || 800,
+          worldHeight:  world.height       || 600,
+          playerRadius: world.playerRadius || 20,
+        }
+      });
+
+      game.start();
+    }
+    window.selectTeam = function(team) {
+      myTeam = team;
+
+      // Actualizar botones
+      document.getElementById('btn-red').classList.toggle('active', team === 'red');
+      document.getElementById('btn-blue').classList.toggle('active', team === 'blue');
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'extras_update',
+          extras: { team }
+        }));
+      }
+    };
+
+    function teamColor(team) {
+      if (team === 'red')  return '#ff4444';
+      if (team === 'blue') return '#4466ff';
+      return null; 
+    }
+
+    function receivePlayersUpdate(players) {
+      const mergedPlayers = players.map(p => {
+        const previous = playersPanelCache.get(p.userId) || {};
+        const merged = {
+          ...previous,
+          ...p,
+          extras: {
+            ...(previous.extras || {}),
+            ...(p.extras || {})
+          }
+        };
+        playersPanelCache.set(p.userId, merged);
+        return merged;
+      });
+
+      const visibleIds = new Set(mergedPlayers.map(p => p.userId));
+      for (const userId of playersPanelCache.keys()) {
+        if (!visibleIds.has(userId)) playersPanelCache.delete(userId);
+      }
+
+      const signature = mergedPlayers.map(p => {
+        const team = (p.extras && p.extras.team) || '';
+        const ping = Number.isFinite(p.ping) ? p.ping : '';
+        return `${p.userId}:${p.username}:${team}:${ping}:${p.userId === myUserId}`;
+      }).join('|');
+
+      if (signature === lastPanelSignature) return;
+      lastPanelSignature = signature;
+      updateSidePanel(mergedPlayers);
+    }
+
+    function updateSidePanel(players) {
+      const list     = document.getElementById('players-list');
+      const countEl  = document.getElementById('player-count');
+      const scoreRed = document.getElementById('score-red');
+      const scoreBlu = document.getElementById('score-blue');
+
+      setTextIfChanged(countEl, String(players.length));
+
+      let reds = 0, blues = 0;
+      players.forEach(p => {
+        const team = p.extras && p.extras.team;
+        if (team === 'red')  reds++;
+        if (team === 'blue') blues++;
+      });
+      setTextIfChanged(scoreRed, String(reds));
+      setTextIfChanged(scoreBlu, String(blues));
+
+      const panelKey = players.map(p => {
+        return `${p.userId}:${p.username}:${p.userId === myUserId}`;
+      }).join('|');
+
+      if (panelKey === lastPlayersPanelKey) {
+        updatePlayerPings(players);
+        return;
+      }
+      lastPlayersPanelKey = panelKey;
+
+      if (players.length === 0) {
+        lastPlayersPanelKey = '';
+        list.innerHTML = '<li style="color:#555;font-size:0.8rem">Sin jugadores</li>';
+        return;
+      }
+
+      list.innerHTML = players.map(p => {
+        const team  = (p.extras && p.extras.team) || null;
+        const color = teamColor(team) || '#7b68ee';
+        const isMe  = p.userId === myUserId;
+        const ping  = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
+        const tag   = team
+          ? `<span class="team-tag ${team}">${team === 'red' ? '🔴' : '🔵'}</span>`
+          : `<span class="team-tag none">—</span>`;
+        return `
+          <li class="player-item" data-user-id="${String(p.userId)}">
+            <div class="player-dot" style="background:${color}"></div>
+            <span class="player-name">${escapeHtml(p.username)}${isMe ? ' <small style="color:#7b68ee">(tú)</small>' : ''}</span>
+            <span class="player-ping">${ping}</span>
+            ${tag}
+          </li>`;
+      }).join('');
+    }
+
+    function updatePlayerPings(players) {
+      players.forEach(p => {
+        const item = document.querySelector(`[data-user-id="${CSS.escape(String(p.userId))}"]`);
+        if (!item) return;
+
+        const team = (p.extras && p.extras.team) || null;
+        const color = teamColor(team) || '#7b68ee';
+        const isMe = p.userId === myUserId;
+        const ping = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
+        const tag = item.querySelector('.team-tag');
+
+        item.querySelector('.player-dot').style.background = color;
+        setTextIfChanged(item.querySelector('.player-name'), `${p.username}${isMe ? ' (tu)' : ''}`);
+        setTextIfChanged(item.querySelector('.player-ping'), ping);
+        if (tag) {
+          tag.className = `team-tag ${team || 'none'}`;
+          setTextIfChanged(tag, team === 'red' ? 'R' : team === 'blue' ? 'A' : '-');
+        }
+      });
+    }
+
+    function setTextIfChanged(el, text) {
+      if (el.textContent !== text) el.textContent = text;
+    }
+    window.logout = function() {
+      manualClose = true;
+      clearReconnectTimer();
+      if (game) game.destroy();
+      stopPingMonitor();
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      window.location.href = 'login.html';
+    };
+
+    function setStatus(state, text) {
+      document.getElementById('status-dot').className = 'status-dot ' + state;
+      document.getElementById('status-text').textContent = text;
+    }
+
+    function showAlert(msg) {
+      const el = document.getElementById('alert-box');
+      el.textContent = msg;
+      el.classList.add('show');
+    }
+
+    function hideAlert() {
+      document.getElementById('alert-box').classList.remove('show');
+    }
+
+    function escapeHtml(text) {
+      const d = document.createElement('div');
+      d.appendChild(document.createTextNode(text));
+      return d.innerHTML;
+    }
+    connect();
+  </script>
 </body>
 </html>
