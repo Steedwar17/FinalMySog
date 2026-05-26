@@ -507,7 +507,6 @@ app.post('/heartbeat', (req, res) => {
 });
 
 app.get('/coordinator', (_req, res) => {
-  // Si soy réplica, redirigir al líder
   if (role !== 'leader') {
     if (!leaderUrl) return res.status(503).json({ error: 'no_leader' });
     return res.status(503).json({ error: 'not_leader', leaderUrl });
@@ -520,7 +519,11 @@ app.get('/coordinator', (_req, res) => {
   vivos.sort((a, b) => a.connectedPlayers - b.connectedPlayers);
   const elegido = vivos[0];
   console.log(`[auth] Cliente asignado a ${elegido.coordinatorId} (${elegido.connectedPlayers} jugadores)`);
-  return res.json({ coordinatorId: elegido.coordinatorId, publicUrl: elegido.publicUrl });
+  return res.json({
+    coordinatorId: elegido.coordinatorId,
+    publicUrl:     elegido.publicUrl,
+    wsUrl:         elegido.publicUrl,   // ← añadir esta línea
+  });
 });
 
 app.use((_req, res) => {
