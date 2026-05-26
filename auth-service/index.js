@@ -1,38 +1,25 @@
 require('dotenv').config();
 
-const express    = require('express');
-const cors       = require('cors');
-const bcrypt     = require('bcrypt');
-const jwt        = require('jsonwebtoken');
+const express = require('express');
+const cors = require('cors');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
-const Database   = require('better-sqlite3');
-const http       = require('http');
+const Database = require('better-sqlite3');
+const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 
 // ── Configuración ──────────────────────────────────────────────────────────
-const PORT           = parseInt(process.env.PORT  || '4000', 10);
+const PORT           = parseInt(process.env.PORT || '4000', 10);
 const PEER_PORT      = parseInt(process.env.PEER_PORT || '4100', 10);
-const AUTH_ID        = process.env.AUTH_ID   || 'auth-a';
+const AUTH_ID        = process.env.AUTH_ID || 'auth-a';
 const PUBLIC_URL     = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const PEER_URL       = process.env.PEER_URL   || `ws://localhost:${PEER_PORT}`;
-// Lista de peers: "auth-b=ws://localhost:4101,auth-c=ws://localhost:4102"
-const PEER_LIST      = process.env.PEER_LIST  || '';
-
+const PEER_URLS      = (process.env.PEER_URLS || '').split(',').map(u => u.trim()).filter(Boolean);
 const JWT_SECRET     = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const BCRYPT_ROUNDS  = parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-
-// Tolerancia de lag para lecturas en réplica (seq diff)
-const REPLICA_LAG_TOLERANCE = parseInt(process.env.REPLICA_LAG_TOLERANCE || '10', 10);
-
-const corsOptions = {
-  origin: process.env.CORS_ORIGINS,
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 200,
-};
 
 if (!JWT_SECRET || JWT_SECRET.length < 32) {
   console.error('[auth] FATAL: JWT_SECRET no definida o menor a 32 caracteres');
@@ -43,10 +30,26 @@ if (!GOOGLE_CLIENT_ID) {
   process.exit(1);
 }
 
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(o => o.trim());
+const corsOptions = {
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // ── Base de datos ──────────────────────────────────────────────────────────
-const db = new Database(`users_${AUTH_ID}.db`);
+const db = new Database('users.db');
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,62 +68,46 @@ db.exec(`
 `);
 
 const stmts = {
-  insertLocal:    db.prepare("INSERT INTO users (username, provider, password_hash, created_at) VALUES (?, 'local', ?, ?)"),
-  insertGoogle:   db.prepare("INSERT INTO users (username, provider, google_sub, email, created_at) VALUES (?, 'google', ?, ?, ?)"),
-  insertById:     db.prepare("INSERT OR IGNORE INTO users (id, username, provider, password_hash, google_sub, email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  insertLocal:    db.prepare("INSERT INTO users (username, provider, password_hash) VALUES (?, 'local', ?)"),
+  insertGoogle:   db.prepare("INSERT INTO users (username, provider, google_sub, email) VALUES (?, 'google', ?, ?)"),
   findByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
   findByGoogle:   db.prepare('SELECT * FROM users WHERE google_sub = ?'),
-  countUsers:     db.prepare('SELECT COUNT(*) as n FROM users'),
+  countUsers:     db.prepare('SELECT COUNT(*) as count FROM users'),
   logWrite:       db.prepare('INSERT INTO write_log (op, data) VALUES (?, ?)'),
   getLogFrom:     db.prepare('SELECT seq, op, data FROM write_log WHERE seq > ? ORDER BY seq ASC'),
-  maxSeq:         db.prepare('SELECT MAX(seq) as s FROM write_log'),
+  maxSeq:         db.prepare('SELECT MAX(seq) as maxSeq FROM write_log'),
 };
 
-function getMaxSeq() {
-  const row = stmts.maxSeq.get();
-  return row.s || 0;
-}
-
-// ── Estado del nodo ────────────────────────────────────────────────────────
+// ── Estado de replicación ──────────────────────────────────────────────────
 let role          = 'replica';   // 'leader' | 'replica'
 let currentTerm   = 0;
-let currentLeaderUrl = null;     // URL pública del líder actual
-let currentLeaderId  = null;
-let lastAppliedSeq   = getMaxSeq();
-let leaderLastSeq    = lastAppliedSeq; // lo que el líder reporta en heartbeat
+let leaderUrl     = null;
+let lastAppliedSeq = (() => { const r = stmts.maxSeq.get(); return r.maxSeq || 0; })();
+let leaderLastSeq  = lastAppliedSeq;
+let lastHeartbeat  = null;
+let votesReceived  = 0;
+let electionTimer  = null;
 
-// Timers
-let heartbeatTimer    = null;   // usado por el líder para emitir HBs
-let electionTimer     = null;   // usado por réplicas para detectar HB ausente
-const HEARTBEAT_INTERVAL = 2000;
-const ELECTION_TIMEOUT   = 6000;
-
-// ── Mesh de peers ──────────────────────────────────────────────────────────
-// Map<authId, { peerUrl, ws, role }>
+// Map de peers WS conectados: authId -> WebSocket
 const peers = new Map();
+// Info de peers conocidos: authId -> { publicUrl, peerUrl, role }
+const peerInfo = new Map();
 
-// Parsear PEER_LIST: "auth-b=ws://host:4101,auth-c=ws://host:4102"
-if (PEER_LIST) {
-  for (const entry of PEER_LIST.split(',')) {
-    const [id, url] = entry.trim().split('=');
-    if (id && url) peers.set(id, { peerUrl: url, ws: null, role: 'replica' });
-  }
-}
-
-// ── Directory Service — coordinadores vivos (igual que antes) ──────────────
+// ── Directory Service — coordinadores vivos ────────────────────────────────
 const coordinators = new Map();
-const COORD_TIMEOUT = 6000;
+const HEARTBEAT_TIMEOUT = 6000;
+
 setInterval(() => {
   const now = Date.now();
   for (const [id, info] of coordinators.entries()) {
-    if (now - info.lastSeen > COORD_TIMEOUT) {
+    if (now - info.lastSeen > HEARTBEAT_TIMEOUT) {
       coordinators.delete(id);
-      console.log(`[${AUTH_ID}] Coordinador muerto eliminado: ${id}`);
+      console.log(`[auth] Coordinador muerto eliminado: ${id}`);
     }
   }
 }, 2000);
 
-// ── Helpers JWT ────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 function emitToken(user) {
   return jwt.sign(
     { userId: user.id, username: user.username, provider: user.provider },
@@ -136,402 +123,295 @@ function validateUsername(u) {
   return null;
 }
 
-// ── Aplicar una escritura recibida (desde propagación o sync) ──────────────
-function applyWrite(op, data, seq) {
-  try {
-    const createdAt = data.created_at || new Date().toISOString();
-    if (op === 'register') {
-      stmts.insertById.run(data.userId, data.username, 'local', data.password_hash, null, null, createdAt);
-    } else if (op === 'register_google') {
-      stmts.insertById.run(data.userId, data.username, 'google', null, data.google_sub, data.email || null, createdAt);
-    }
-    lastAppliedSeq = seq;
-  } catch (err) {
-    console.error(`[${AUTH_ID}] applyWrite error (op=${op}):`, err.message);
+function getLastSeq() {
+  const r = stmts.maxSeq.get();
+  return r.maxSeq || 0;
+}
+
+function broadcastToPeers(msg) {
+  const str = JSON.stringify(msg);
+  for (const ws of peers.values()) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(str);
   }
 }
 
-// ── Broadcast a todos los peers conectados ─────────────────────────────────
-function broadcast(msg) {
-  const raw = JSON.stringify(msg);
-  for (const [id, p] of peers.entries()) {
-    if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-      p.ws.send(raw);
-    }
+function applyWrite(op, data) {
+  if (op === 'register') {
+    try {
+      stmts.insertLocal.run(data.username, data.password_hash);
+    } catch(e) { /* ya existe, ignorar */ }
+  } else if (op === 'register_google') {
+    try {
+      stmts.insertGoogle.run(data.username, data.google_sub, data.email);
+    } catch(e) { /* ya existe, ignorar */ }
   }
 }
 
-// ── Heartbeat (líder → réplicas) ───────────────────────────────────────────
-function startHeartbeats() {
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
-  heartbeatTimer = setInterval(() => {
-    const msg = { type: 'heartbeat', authId: AUTH_ID, term: currentTerm, lastSeq: lastAppliedSeq };
-    broadcast(msg);
-  }, HEARTBEAT_INTERVAL);
-}
-
-function stopHeartbeats() {
-  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-}
-
-// ── Election timeout (réplica → detecta líder muerto) ─────────────────────
-function resetElectionTimer() {
-  if (electionTimer) clearTimeout(electionTimer);
-  electionTimer = setTimeout(() => {
-    console.log(`[${AUTH_ID}] Timeout de heartbeat — iniciando elección`);
-    startElection();
-  }, ELECTION_TIMEOUT);
-}
-
-function stopElectionTimer() {
-  if (electionTimer) { clearTimeout(electionTimer); electionTimer = null; }
-}
-
-// ── Elección ───────────────────────────────────────────────────────────────
-let votesReceived = 0;
-let votingFor     = null;
-
+// ── Elección de líder ──────────────────────────────────────────────────────
 function startElection() {
+  currentTerm++;
   role = 'replica';
-  currentTerm += 1;
-  currentLeaderUrl = null;
-  currentLeaderId  = null;
-  votesReceived = 1; // me voto a mí mismo
-  votingFor = AUTH_ID;
+  leaderUrl = null;
+  votesReceived = 1; // voto por uno mismo
+  console.log(`[auth] ${AUTH_ID} inicia elección — term ${currentTerm}`);
 
-  console.log(`[${AUTH_ID}] Elección — term ${currentTerm}, lastSeq=${lastAppliedSeq}`);
-
-  broadcast({
+  broadcastToPeers({
     type: 'election',
     candidate: AUTH_ID,
     term: currentTerm,
-    lastSeq: lastAppliedSeq,
+    lastSeq: getLastSeq(),
   });
 
-  // Si no hay peers conectados, gano solo
-  checkElectionWin();
-
-  // Reiniciar el timer por si no hay quórum
-  resetElectionTimer();
-}
-
-function checkElectionWin() {
-  const totalNodes = 1 + peers.size; // yo + peers conocidos
-  const majority = Math.floor(totalNodes / 2) + 1;
-  if (votesReceived >= majority) {
-    becomeLeader();
-  }
+  // Si en 3 segundos no hay quórum, reintentar
+  setTimeout(() => {
+    if (role !== 'leader') {
+      console.log(`[auth] Elección sin quórum, reintentando...`);
+      startElection();
+    }
+  }, 3000);
 }
 
 function becomeLeader() {
   role = 'leader';
-  currentLeaderUrl = PUBLIC_URL;
-  currentLeaderId  = AUTH_ID;
-  votesReceived = 0;
-  votingFor = null;
-  stopElectionTimer();
-  startHeartbeats();
+  leaderUrl = PUBLIC_URL;
+  console.log(`[auth] ${AUTH_ID} es ahora el LÍDER — term ${currentTerm}`);
 
-  console.log(`[${AUTH_ID}] 🎉 Soy el nuevo líder — term ${currentTerm}`);
+  broadcastToPeers({
+    type: 'new_leader',
+    leader: AUTH_ID,
+    term: currentTerm,
+    leaderUrl: PUBLIC_URL,
+  });
 
-  broadcast({ type: 'new_leader', leader: AUTH_ID, term: currentTerm, leaderUrl: PUBLIC_URL });
-}
-
-// ── Manejo de mensajes WS del mesh ─────────────────────────────────────────
-function handlePeerMessage(senderId, raw) {
-  let msg;
-  try { msg = JSON.parse(raw); } catch { return; }
-
-  switch (msg.type) {
-
-    case 'hello': {
-      const p = peers.get(msg.authId);
-      if (p) { p.role = msg.role; }
-      // Si el remoto dice ser líder con term >= nuestro term, lo reconocemos
-      if (msg.role === 'leader' && msg.term >= currentTerm) {
-        currentTerm = msg.term;
-        currentLeaderId = msg.authId;
-        // Buscar publicUrl del líder
-        const lp = peers.get(msg.authId);
-        if (lp && lp.publicUrl) currentLeaderUrl = lp.publicUrl;
-        if (role !== 'leader') resetElectionTimer();
-      }
-      // Si somos líder, enviarle sync si está atrasado
-      if (role === 'leader' && msg.lastSeq !== undefined && msg.lastSeq < lastAppliedSeq) {
-        sendSync(senderId, msg.lastSeq);
-      }
-      break;
-    }
-
-    case 'heartbeat': {
-      if (msg.term < currentTerm) break; // heartbeat viejo, ignorar
-      currentTerm      = msg.term;
-      currentLeaderId  = msg.authId;
-      leaderLastSeq    = msg.lastSeq;
-      // Buscar publicUrl
-      const lp = peers.get(msg.authId);
-      if (lp && lp.publicUrl) currentLeaderUrl = lp.publicUrl;
-      else currentLeaderUrl = null; // lo tendremos cuando el peer se registre
-      resetElectionTimer();
-      // Pedir sync si estamos atrasados
-      if (msg.lastSeq > lastAppliedSeq) {
-        const ws = peers.get(msg.authId)?.ws;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'request_sync', fromSeq: lastAppliedSeq }));
-        }
-      }
-      break;
-    }
-
-    case 'write_propagate': {
-      if (msg.term < currentTerm) break;
-      applyWrite(msg.op, msg.data, msg.seq);
-      break;
-    }
-
-    case 'request_sync': {
-      if (role !== 'leader') break;
-      sendSync(senderId, msg.fromSeq);
-      break;
-    }
-
-    case 'sync_response': {
-      if (!msg.entries || !Array.isArray(msg.entries)) break;
-      for (const entry of msg.entries) {
-        if (entry.seq > lastAppliedSeq) {
-          applyWrite(entry.op, entry.data, entry.seq);
-        }
-      }
-      console.log(`[${AUTH_ID}] Sync completado — lastSeq=${lastAppliedSeq}`);
-      break;
-    }
-
-    case 'election': {
-      if (msg.term < currentTerm) {
-        // Candidato obsoleto — no votar
-        const ws = peers.get(msg.candidate)?.ws;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'vote', voter: AUTH_ID, term: msg.term, voteGranted: false }));
-        }
-        break;
-      }
-      // Votar si no hemos votado en este term y el candidato está al día
-      const canVote = (votingFor === null || votingFor === msg.candidate) &&
-                      msg.term >= currentTerm &&
-                      msg.lastSeq >= lastAppliedSeq;
-      if (canVote) {
-        currentTerm = msg.term;
-        votingFor = msg.candidate;
-        if (role === 'leader') {
-          stopHeartbeats();
-          role = 'replica';
-        }
-        resetElectionTimer();
-        const ws = peers.get(msg.candidate)?.ws;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'vote', voter: AUTH_ID, term: msg.term, voteGranted: true }));
-        }
-        console.log(`[${AUTH_ID}] Voté por ${msg.candidate} en term ${msg.term}`);
-      } else {
-        const ws = peers.get(msg.candidate)?.ws;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'vote', voter: AUTH_ID, term: msg.term, voteGranted: false }));
-        }
-      }
-      break;
-    }
-
-    case 'vote': {
-      if (msg.term !== currentTerm) break;
-      if (msg.voteGranted) {
-        votesReceived += 1;
-        console.log(`[${AUTH_ID}] Voto recibido de ${msg.voter} (${votesReceived} total)`);
-        checkElectionWin();
-      }
-      break;
-    }
-
-    case 'new_leader': {
-      if (msg.term < currentTerm) break;
-      currentTerm = msg.term;
-      currentLeaderId = msg.leader;
-      currentLeaderUrl = msg.leaderUrl || null;
-      votingFor = null;
-      if (role === 'leader' && msg.leader !== AUTH_ID) {
-        stopHeartbeats();
-        role = 'replica';
-      }
-      stopElectionTimer();
-      resetElectionTimer();
-      console.log(`[${AUTH_ID}] Nuevo líder reconocido: ${msg.leader} (term ${msg.term})`);
-      break;
-    }
-
-    case 'peer_info': {
-      // Un peer nos informa su publicUrl
-      const p = peers.get(msg.authId);
-      if (p) {
-        p.publicUrl = msg.publicUrl;
-        if (currentLeaderId === msg.authId) currentLeaderUrl = msg.publicUrl;
-      }
-      break;
-    }
+  // Cancelar watchdog — el líder no necesita vigilarse a sí mismo
+  if (leaderWatchdog) {
+    clearTimeout(leaderWatchdog);
+    leaderWatchdog = null;
   }
-}
 
-function sendSync(targetId, fromSeq) {
-  const entries = stmts.getLogFrom.all(fromSeq).map(row => ({
-    seq: row.seq,
-    op: row.op,
-    data: JSON.parse(row.data),
-  }));
-  const ws = peers.get(targetId)?.ws;
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'sync_response', entries }));
-  }
-}
-
-// ── WS Server (puerto PEER_PORT) — escucha conexiones de otros auths ──────
-const peerServer = new WebSocketServer({ port: PEER_PORT });
-peerServer.on('listening', () => console.log(`[${AUTH_ID}] Peer WS escuchando en :${PEER_PORT}`));
-peerServer.on('connection', (ws) => {
-  let remoteId = null;
-
-  ws.on('message', (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
-
-    if (!remoteId && msg.type === 'hello') {
-      remoteId = msg.authId;
-      // Registrar o actualizar peer
-      if (!peers.has(remoteId)) {
-        peers.set(remoteId, { peerUrl: null, ws, role: msg.role, publicUrl: msg.publicUrl || null });
-      } else {
-        const p = peers.get(remoteId);
-        p.ws  = ws;
-        p.role = msg.role;
-        if (msg.publicUrl) p.publicUrl = msg.publicUrl;
-      }
-      console.log(`[${AUTH_ID}] Peer conectado (inbound): ${remoteId}`);
-      // Responder con nuestro hello
-      ws.send(JSON.stringify({
-        type: 'hello',
+  if (electionTimer) clearInterval(electionTimer);
+  electionTimer = setInterval(() => {
+    if (role === 'leader') {
+      broadcastToPeers({
+        type: 'heartbeat',
         authId: AUTH_ID,
-        role,
         term: currentTerm,
-        lastSeq: lastAppliedSeq,
-        publicUrl: PUBLIC_URL,
-      }));
+        lastSeq: getLastSeq(),
+      });
     }
+  }, 2000);
+}
 
-    if (remoteId) handlePeerMessage(remoteId, raw);
+// Detectar muerte del líder
+let leaderWatchdog = null;
+function resetLeaderWatchdog() {
+  lastHeartbeat = Date.now();
+  if (leaderWatchdog) clearTimeout(leaderWatchdog);
+  leaderWatchdog = setTimeout(() => {
+    if (role !== 'leader') {
+      console.log(`[auth] Líder no responde — iniciando elección`);
+      startElection();
+    }
+  }, 6000);
+}
+
+// ── Manejo de mensajes del mesh ────────────────────────────────────────────
+function handlePeerMessage(msg, ws) {
+  if (msg.type === 'hello') {
+    peerInfo.set(msg.authId, {
+      authId: msg.authId,
+      role: msg.role,
+      term: msg.term,
+    });
+    // Si el que se conecta tiene term mayor, actualizar
+    if (msg.term > currentTerm) {
+      currentTerm = msg.term;
+      role = 'replica';
+    }
+    // Pedir sync si estamos atrasados
+    const mySeq = getLastSeq();
+    if (msg.role === 'leader' && mySeq < (msg.lastSeq || 0)) {
+      ws.send(JSON.stringify({ type: 'request_sync', fromSeq: mySeq }));
+    }
+    resetLeaderWatchdog();
+  }
+
+  else if (msg.type === 'heartbeat') {
+    if (msg.term >= currentTerm) {
+      currentTerm = msg.term;
+      leaderLastSeq = msg.lastSeq || 0;
+      resetLeaderWatchdog();
+      // Pedir sync si estamos atrasados
+      const mySeq = getLastSeq();
+      if (leaderLastSeq - mySeq > 0) {
+        ws.send(JSON.stringify({ type: 'request_sync', fromSeq: mySeq }));
+      }
+    }
+  }
+
+  else if (msg.type === 'write_propagate') {
+    if (msg.term >= currentTerm && msg.seq > lastAppliedSeq) {
+      applyWrite(msg.op, msg.data);
+      stmts.logWrite.run(msg.op, JSON.stringify(msg.data));
+      lastAppliedSeq = msg.seq;
+      console.log(`[auth] Escritura aplicada seq=${msg.seq} op=${msg.op}`);
+    }
+  }
+
+  else if (msg.type === 'request_sync') {
+    if (role === 'leader') {
+      const entries = stmts.getLogFrom.all(msg.fromSeq).map(e => ({
+        seq: e.seq,
+        op: e.op,
+        data: JSON.parse(e.data),
+      }));
+      ws.send(JSON.stringify({ type: 'sync_response', entries }));
+    }
+  }
+
+  else if (msg.type === 'sync_response') {
+    for (const entry of msg.entries) {
+      if (entry.seq > lastAppliedSeq) {
+        applyWrite(entry.op, entry.data);
+        stmts.logWrite.run(entry.op, JSON.stringify(entry.data));
+        lastAppliedSeq = entry.seq;
+      }
+    }
+    console.log(`[auth] Sync completado — lastSeq=${lastAppliedSeq}`);
+  }
+
+  else if (msg.type === 'election') {
+    if (msg.term > currentTerm) {
+      currentTerm = msg.term;
+      role = 'replica';
+      leaderUrl = null;
+    }
+    // Votar si el candidato está al día
+    const mySeq = getLastSeq();
+    const voteGranted = msg.term >= currentTerm && msg.lastSeq >= mySeq;
+    ws.send(JSON.stringify({
+      type: 'vote',
+      voter: AUTH_ID,
+      term: msg.term,
+      voteGranted,
+    }));
+  }
+
+  else if (msg.type === 'vote') {
+    if (msg.term === currentTerm && msg.voteGranted) {
+      votesReceived++;
+      const majority = Math.floor((peers.size + 1) / 2) + 1;
+      if (votesReceived >= majority && role !== 'leader') {
+        becomeLeader();
+      }
+    }
+  }
+
+  else if (msg.type === 'new_leader') {
+    if (msg.term >= currentTerm) {
+      currentTerm = msg.term;
+      role = 'replica';
+      leaderUrl = msg.leaderUrl;
+      console.log(`[auth] Nuevo líder: ${msg.leader} — term ${msg.term}`);
+      resetLeaderWatchdog();
+    }
+  }
+}
+
+// ── Servidor WS para peers ─────────────────────────────────────────────────
+const peerServer = new WebSocketServer({ port: PEER_PORT });
+console.log(`[auth] Mesh WS escuchando en puerto ${PEER_PORT}`);
+
+peerServer.on('connection', (ws) => {
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      handlePeerMessage(msg, ws);
+      if (msg.authId && !peers.has(msg.authId)) {
+        peers.set(msg.authId, ws);
+      }
+    } catch(e) {}
   });
 
   ws.on('close', () => {
-    if (remoteId) {
-      console.log(`[${AUTH_ID}] Peer desconectado: ${remoteId}`);
-      const p = peers.get(remoteId);
-      if (p) p.ws = null;
+    for (const [id, sock] of peers.entries()) {
+      if (sock === ws) {
+        peers.delete(id);
+        console.log(`[auth] Peer desconectado: ${id}`);
+        break;
+      }
     }
   });
+
+  // Handshake
+  ws.send(JSON.stringify({
+    type: 'hello',
+    authId: AUTH_ID,
+    role,
+    term: currentTerm,
+    lastSeq: getLastSeq(),
+  }));
 });
 
-// ── Conectar a peers outbound ──────────────────────────────────────────────
-function connectToPeer(id, peerUrl) {
-  // Solo el de AUTH_ID lexicográficamente menor inicia
-  if (AUTH_ID >= id) return; // el de id mayor inicia; el menor espera
+// ── Conectar a peers conocidos ─────────────────────────────────────────────
+function connectToPeer(peerUrl) {
+  console.log(`[auth] Conectando a peer: ${peerUrl}`);
+  const ws = new WebSocket(peerUrl);
 
-  function tryConnect() {
-    console.log(`[${AUTH_ID}] Conectando a peer ${id} en ${peerUrl}…`);
-    const ws = new WebSocket(peerUrl);
+  ws.on('open', () => {
+    ws.send(JSON.stringify({
+      type: 'hello',
+      authId: AUTH_ID,
+      role,
+      term: currentTerm,
+      lastSeq: getLastSeq(),
+    }));
+  });
 
-    ws.on('open', () => {
-      const p = peers.get(id);
-      if (p) p.ws = ws;
-      // Handshake
-      ws.send(JSON.stringify({
-        type: 'hello',
-        authId: AUTH_ID,
-        role,
-        term: currentTerm,
-        lastSeq: lastAppliedSeq,
-        publicUrl: PUBLIC_URL,
-      }));
-    });
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      handlePeerMessage(msg, ws);
+      if (msg.authId && !peers.has(msg.authId)) {
+        peers.set(msg.authId, ws);
+      }
+    } catch(e) {}
+  });
 
-    ws.on('message', (raw) => handlePeerMessage(id, raw));
+  ws.on('close', () => {
+    console.log(`[auth] Peer caído: ${peerUrl} — reintentando en 5s`);
+    setTimeout(() => connectToPeer(peerUrl), 5000);
+  });
 
-    ws.on('close', () => {
-      console.log(`[${AUTH_ID}] Conexión con ${id} cerrada — reintentando en 3s`);
-      const p = peers.get(id);
-      if (p) p.ws = null;
-      setTimeout(tryConnect, 3000);
-    });
+  ws.on('error', () => {
+    console.log(`[auth] Error conectando a ${peerUrl}`);
+  });
+}
 
-    ws.on('error', (err) => {
-      console.warn(`[${AUTH_ID}] Error conectando a ${id}: ${err.message}`);
-    });
+// Conectar a peers al arrancar
+setTimeout(() => {
+  for (const url of PEER_URLS) {
+    connectToPeer(url);
   }
-
-  setTimeout(tryConnect, 1000 + Math.random() * 500);
-}
-
-// Iniciar conexiones outbound
-for (const [id, p] of peers.entries()) {
-  if (p.peerUrl) connectToPeer(id, p.peerUrl);
-}
-
-// ── Bootstrap: el primero en arrancar se autoproclama líder inicial ─────────
-// Si no hay peers configurados en absoluto, soy líder solo.
-// Si hay peers, espero HB; si no llega en ELECTION_TIMEOUT, inicio elección.
-if (peers.size === 0) {
-  // Nodo único — líder por defecto
-  role = 'leader';
-  currentLeaderUrl = PUBLIC_URL;
-  currentLeaderId  = AUTH_ID;
-  currentTerm      = 1;
-  console.log(`[${AUTH_ID}] Nodo único — líder por defecto`);
-  startHeartbeats();
-} else {
-  // Espera heartbeat; si no llega, inicia elección
-  resetElectionTimer();
-}
-
-// ── Propagación de escritura ───────────────────────────────────────────────
-// Opción A: aplica localmente, responde al cliente, propaga en background
-function propagateWrite(op, data, seq) {
-  const msg = { type: 'write_propagate', term: currentTerm, seq, op, data };
-  broadcast(msg);
-}
+  // Iniciar elección después de conectar
+  setTimeout(() => {
+    if (role !== 'leader') {
+      if (peers.size === 0) {
+        // Nadie conectado, me convierto en líder directamente
+        console.log(`[auth] Sin peers — convirtiéndome en líder directamente`);
+        becomeLeader();
+      } else {
+        startElection();
+      }
+    }
+  }, 3000);
+}, 1000);
 
 // ── Express ────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '4kb' }));
 app.options('*', cors(corsOptions));
-
-// Middleware: adjunta estado actual
-app.use((req, _res, next) => {
-  req.authState = { role, currentLeaderUrl, currentTerm, lastAppliedSeq };
-  next();
-});
-
-// ── Helpers de respuesta para réplica ──────────────────────────────────────
-function rejectWrite(res) {
-  if (!currentLeaderUrl) {
-    return res.status(503).json({ error: 'no_leader' });
-  }
-  return res.status(503).json({ error: 'not_leader', leaderUrl: currentLeaderUrl });
-}
-
-function isReplicaLagged() {
-  return (leaderLastSeq - lastAppliedSeq) > REPLICA_LAG_TOLERANCE;
-}
-
-// ── GET /health ────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'auth-service', authId: AUTH_ID });
-});
 
 // ── GET /status ────────────────────────────────────────────────────────────
 app.get('/status', (_req, res) => {
@@ -540,29 +420,40 @@ app.get('/status', (_req, res) => {
     role,
     publicUrl: PUBLIC_URL,
     peerUrl: PEER_URL,
-    leaderUrl: currentLeaderUrl,
-    knownPeers: Array.from(peers.keys()),
-    lastAppliedSeq,
-    users: stmts.countUsers.get().n,
-    term: currentTerm,
+    leaderUrl: role === 'leader' ? PUBLIC_URL : leaderUrl,
+    knownPeers: Array.from(peerInfo.keys()),
+    lastAppliedSeq: getLastSeq(),
+    users: stmts.countUsers.get().count,
   });
 });
 
 // ── GET /peers ─────────────────────────────────────────────────────────────
 app.get('/peers', (_req, res) => {
-  const list = Array.from(peers.entries()).map(([id, p]) => ({
-    authId: id,
+  const authPeers = Array.from(peerInfo.values()).map(p => ({
+    authId: p.authId,
     publicUrl: p.publicUrl || null,
     peerUrl: p.peerUrl || null,
-    role: p.role || 'unknown',
+    role: p.role,
   }));
-  res.json({ peers: list });
+  res.json({ peers: authPeers });
 });
 
-// ── POST /register ─────────────────────────────────────────────────────────
-app.post('/register', async (req, res) => {
-  if (role !== 'leader') return rejectWrite(res);
+// ── Health check ───────────────────────────────────────────────────────────
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', service: 'auth-service', role, authId: AUTH_ID });
+});
 
+// ── Middleware para verificar si es líder en escrituras ────────────────────
+function requireLeader(req, res, next) {
+  if (role === 'leader') return next();
+  if (!leaderUrl) {
+    return res.status(503).json({ error: 'no_leader' });
+  }
+  return res.status(503).json({ error: 'not_leader', leaderUrl });
+}
+
+// ── POST /register ─────────────────────────────────────────────────────────
+app.post('/register', requireLeader, async (req, res) => {
   const { username, password } = req.body ?? {};
   const usernameError = validateUsername(username);
   if (usernameError) return res.status(400).json({ error: usernameError });
@@ -571,34 +462,29 @@ app.post('/register', async (req, res) => {
   }
   try {
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const createdAt    = new Date().toISOString();
-    const result = stmts.insertLocal.run(username.trim(), passwordHash, createdAt);
+    const result = stmts.insertLocal.run(username.trim(), passwordHash);
     const userId = result.lastInsertRowid;
 
-    const data = { userId, username: username.trim(), provider: 'local', password_hash: passwordHash, created_at: createdAt };
+    // Guardar en log y propagar
+    const data = { userId, username: username.trim(), provider: 'local', password_hash: passwordHash, created_at: new Date().toISOString() };
     const logResult = stmts.logWrite.run('register', JSON.stringify(data));
-    lastAppliedSeq = logResult.lastInsertRowid;
-    propagateWrite('register', data, lastAppliedSeq);
+    const seq = logResult.lastInsertRowid;
 
-    console.log(`[${AUTH_ID}] Registrado (local): ${username} id=${userId}`);
+    broadcastToPeers({ type: 'write_propagate', term: currentTerm, seq, op: 'register', data });
+
+    console.log(`[auth] Registrado (local): ${username} id=${userId}`);
     return res.status(201).json({ userId, username: username.trim() });
   } catch (err) {
     if (err.message?.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'El username ya esta registrado' });
     }
-    console.error(`[${AUTH_ID}] Error en /register:`, err.message);
+    console.error('[auth] Error en /register:', err.message);
     return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
 // ── POST /login ────────────────────────────────────────────────────────────
 app.post('/login', async (req, res) => {
-  // Lectura — réplica puede responder si no está muy atrasada
-  if (role !== 'leader' && isReplicaLagged()) return rejectWrite(res);
-  if (role !== 'leader' && !currentLeaderUrl) {
-    return res.status(503).json({ error: 'no_leader' });
-  }
-
   const { username, password } = req.body ?? {};
   if (typeof username !== 'string' || username.trim() === '') {
     return res.status(400).json({ error: 'username es requerido' });
@@ -606,20 +492,27 @@ app.post('/login', async (req, res) => {
   if (typeof password !== 'string' || password === '') {
     return res.status(400).json({ error: 'password es requerido' });
   }
+
+  // Si soy replica muy atrasada, redirigir al líder
+  if (role === 'replica' && leaderLastSeq - getLastSeq() > 10) {
+    return res.status(503).json({ error: 'not_leader', leaderUrl });
+  }
+
   try {
     const user = stmts.findByUsername.get(username.trim());
     const dummyHash = '$2b$10$invalidhashtopreventtimingattackxxxxxxxxxxxxxxxxxxxxxxxxx';
-    const match = await bcrypt.compare(password, user ? user.password_hash : dummyHash);
+    const hashToCompare = user ? user.password_hash : dummyHash;
+    const match = await bcrypt.compare(password, hashToCompare);
     if (!user || !match) {
       return res.status(401).json({ error: 'Credenciales invalidas' });
     }
     if (user.provider !== 'local') {
       return res.status(401).json({ error: 'Este usuario debe iniciar sesion con Google' });
     }
-    console.log(`[${AUTH_ID}] Login (local): ${user.username}`);
+    console.log(`[auth] Login (local): ${user.username}`);
     return res.status(200).json({ token: emitToken(user), username: user.username });
   } catch (err) {
-    console.error(`[${AUTH_ID}] Error en /login:`, err.message);
+    console.error('[auth] Error en /login:', err.message);
     return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
@@ -630,32 +523,31 @@ app.post('/auth/google', async (req, res) => {
   if (typeof idToken !== 'string') {
     return res.status(400).json({ error: 'idToken es requerido' });
   }
-
   let payload;
   try {
     const ticket = await googleClient.verifyIdToken({ idToken, audience: GOOGLE_CLIENT_ID });
     payload = ticket.getPayload();
-  } catch {
+  } catch (err) {
     return res.status(401).json({ error: 'invalid_id_token' });
   }
-
   if (!payload.email_verified) {
     return res.status(401).json({ error: 'email_not_verified' });
   }
-
   const googleSub = payload.sub;
-  const email     = payload.email;
-  const existing  = stmts.findByGoogle.get(googleSub);
+  const email = payload.email;
+  const existing = stmts.findByGoogle.get(googleSub);
 
+  // Usuario existente — lectura, cualquiera puede responder
   if (existing) {
-    // Lectura — réplica puede responder si no está atrasada
-    if (role !== 'leader' && isReplicaLagged()) return rejectWrite(res);
-    console.log(`[${AUTH_ID}] Login (google): ${existing.username}`);
+    console.log(`[auth] Login (google): ${existing.username}`);
     return res.json({ token: emitToken(existing), username: existing.username });
   }
 
-  // Escritura — solo el líder
-  if (role !== 'leader') return rejectWrite(res);
+  // Usuario nuevo — escritura, solo el líder
+  if (role !== 'leader') {
+    if (!leaderUrl) return res.status(503).json({ error: 'no_leader' });
+    return res.status(503).json({ error: 'not_leader', leaderUrl });
+  }
 
   if (!username) {
     return res.status(409).json({ error: 'username_required', hint: 'Es tu primer ingreso con Google. Elige un username.' });
@@ -664,31 +556,27 @@ app.post('/auth/google', async (req, res) => {
   if (usernameError) return res.status(400).json({ error: usernameError });
 
   try {
-    const createdAt = new Date().toISOString();
-    const result = stmts.insertGoogle.run(username.trim(), googleSub, email, createdAt);
+    const result = stmts.insertGoogle.run(username.trim(), googleSub, email);
     const userId = result.lastInsertRowid;
-    const newUser = { id: userId, username: username.trim(), provider: 'google' };
-
-    const data = { userId, username: username.trim(), provider: 'google', google_sub: googleSub, email, created_at: createdAt };
+    const data = { userId, username: username.trim(), provider: 'google', google_sub: googleSub, email, created_at: new Date().toISOString() };
     const logResult = stmts.logWrite.run('register_google', JSON.stringify(data));
-    lastAppliedSeq = logResult.lastInsertRowid;
-    propagateWrite('register_google', data, lastAppliedSeq);
+    const seq = logResult.lastInsertRowid;
 
-    console.log(`[${AUTH_ID}] Registrado (google): ${username} id=${userId}`);
-    return res.json({ token: emitToken(newUser), username: newUser.username });
+    broadcastToPeers({ type: 'write_propagate', term: currentTerm, seq, op: 'register_google', data });
+
+    console.log(`[auth] Registrado (google): ${username} id=${userId}`);
+    return res.json({ token: emitToken({ id: userId, username: username.trim(), provider: 'google' }), username: username.trim() });
   } catch (err) {
     if (err.message?.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'username_taken' });
     }
-    console.error(`[${AUTH_ID}] Error en /auth/google:`, err.message);
+    console.error('[auth] Error en /auth/google:', err.message);
     return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
-// ── POST /heartbeat (coordinadores → directorio) ───────────────────────────
+// ── POST /heartbeat (coordinadores) ───────────────────────────────────────
 app.post('/heartbeat', (req, res) => {
-  if (role !== 'leader') return rejectWrite(res);
-
   const { coordinatorId, publicUrl, peerUrl, connectedPlayers, uptime } = req.body ?? {};
   if (!coordinatorId || !publicUrl || !peerUrl) {
     return res.status(400).json({ error: 'coordinatorId, publicUrl y peerUrl son requeridos' });
@@ -699,29 +587,20 @@ app.post('/heartbeat', (req, res) => {
     uptime: uptime ?? 0,
     lastSeen: Date.now(),
   });
-  console.log(`[${AUTH_ID}] Heartbeat de ${coordinatorId} — jugadores: ${connectedPlayers}`);
+  console.log(`[auth] Heartbeat de ${coordinatorId} — jugadores: ${connectedPlayers}`);
   return res.json({ ok: true });
 });
 
 // ── GET /coordinator ───────────────────────────────────────────────────────
-app.get('/coordinator', (req, res) => {
-  // Réplica puede responder lecturas si no está muy atrasada
-  if (role !== 'leader' && isReplicaLagged()) return rejectWrite(res);
-
+app.get('/coordinator', (_req, res) => {
   const vivos = Array.from(coordinators.values());
   if (vivos.length === 0) {
     return res.status(503).json({ error: 'no_coordinators_available' });
   }
   vivos.sort((a, b) => a.connectedPlayers - b.connectedPlayers);
   const elegido = vivos[0];
-  console.log(`[${AUTH_ID}] Cliente asignado a ${elegido.coordinatorId} (${elegido.connectedPlayers} jugadores)`);
+  console.log(`[auth] Cliente asignado a ${elegido.coordinatorId} (${elegido.connectedPlayers} jugadores)`);
   return res.json({ coordinatorId: elegido.coordinatorId, publicUrl: elegido.publicUrl });
-});
-
-// ── GET /coordinator/all (réplicas también pueden servir) ──────────────────
-app.get('/coordinator/all', (_req, res) => {
-  const vivos = Array.from(coordinators.values());
-  return res.json({ coordinators: vivos });
 });
 
 // ── 404 ───────────────────────────────────────────────────────────────────
@@ -731,7 +610,6 @@ app.use((_req, res) => {
 
 // ── Arrancar ───────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`[${AUTH_ID}] Auth service en puerto ${PORT} | Peer WS: ${PEER_PORT}`);
-  console.log(`[${AUTH_ID}] PUBLIC_URL=${PUBLIC_URL} | PEER_URL=${PEER_URL}`);
-  console.log(`[${AUTH_ID}] Peers configurados: ${Array.from(peers.keys()).join(', ') || 'ninguno'}`);
+  console.log(`[auth] ${AUTH_ID} corriendo en puerto ${PORT} — rol inicial: ${role}`);
+  console.log(`[auth] CORS: ${process.env.CORS_ORIGINS}`);
 });
