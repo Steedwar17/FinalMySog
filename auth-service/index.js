@@ -363,17 +363,18 @@ setTimeout(() => {
 }, 1000);
 
 // ── GET /status ────────────────────────────────────────────────────────────
-app.get('/status', (_req, res) => {
-  res.json({
-    authId: AUTH_ID,
-    role,
-    publicUrl: PUBLIC_URL,
-    peerUrl: PEER_URL,
-    leaderUrl: role === 'leader' ? PUBLIC_URL : leaderUrl,
-    knownPeers: Array.from(peerInfo.keys()),
-    lastAppliedSeq: getLastSeq(),
-    users: stmts.countUsers.get().count,
-  });
+app.get('/peers', (_req, res) => {
+  console.log('[PEERS] consultado, coordinadores:', coordinators.size);
+  const now = Date.now();
+  const alive = Array.from(coordinators.values())
+    .filter(c => now - c.lastSeen < 6000)
+    .map(c => ({
+      coordinatorId: c.coordinatorId,
+      peerUrl: c.peerUrl,
+      publicUrl: c.publicUrl,
+      connectedPlayers: c.connectedPlayers,
+    }));
+  res.json({ peers: alive });
 });
 
 app.get('/peers', (_req, res) => {
