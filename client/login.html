@@ -50,6 +50,17 @@
       font-weight: 600;
     }
 
+    .spectator-link {
+      display: block;
+      text-align: center;
+      color: #aaa;
+      font-size: 0.85rem;
+      margin-bottom: 1.25rem;
+      text-decoration: none;
+    }
+
+    .spectator-link:hover { color: #7b68ee; }
+
     .tabs {
       display: flex;
       border-bottom: 2px solid #2a2a3e;
@@ -233,6 +244,7 @@
     <h1>🎮 Multijugador</h1>
     <p class="subtitle">Sistemas Distribuidos - Taller 7</p>
     <p class="auth-status">Auth: <strong id="auth-value">--</strong></p>
+    <a class="spectator-link" href="spectator.html">Entrar como espectador</a>
 
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('login')">Iniciar sesión</button>

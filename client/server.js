@@ -6,6 +6,7 @@ const PORT = process.env.PORT || 3000;
 const AUTH_URLS = parseAuthUrls(process.env.AUTH_URLS || process.env.AUTH_SERVICE_URL || 'http://localhost:4000');
 const COORDINATOR_WS_URL = (process.env.COORDINATOR_WS_URL || '').trim();
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || '').trim();
+const SPECTATOR_WS_PATH = (process.env.SPECTATOR_WS_PATH || '/spectator').trim();
 let lastHealthyAuthUrl = AUTH_URLS[0];
 
 app.use(express.json({ limit: '8kb' }));
@@ -165,6 +166,7 @@ app.get('/config.js', (req, res) => {
     window.GOOGLE_CLIENT_ID   = ${JSON.stringify(GOOGLE_CLIENT_ID)};
     window.AUTH_URLS          = ${JSON.stringify(AUTH_URLS)};
     window.AUTH_ACTIVE_URL    = ${JSON.stringify(lastHealthyAuthUrl)};
+    window.SPECTATOR_WS_PATH  = ${JSON.stringify(SPECTATOR_WS_PATH)};
   `);
 });
 
