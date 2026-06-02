@@ -526,7 +526,28 @@ app.get('/coordinator', (req, res) => {
     return res.status(503).json({ error: 'not_leader', leaderUrl });
   }
 
-  const vivos = Array.from(coordinators.values());
+  const excludedIds = new Set(
+    []
+      .concat(req.query.excludeCoordinatorId || [], req.query.excludeId || [])
+      .flatMap(value => String(value || '').split(','))
+      .map(value => value.trim())
+      .filter(Boolean)
+  );
+  const excludedUrls = new Set(
+    []
+      .concat(req.query.excludeUrl || [], req.query.excludePublicUrl || [])
+      .flatMap(value => String(value || '').split(','))
+      .map(value => value.trim().replace(/\/+$/, ''))
+      .filter(Boolean)
+  );
+
+  const now = Date.now();
+  const vivos = Array.from(coordinators.values()).filter((coordinator) => {
+    const publicUrl = String(coordinator.publicUrl || '').trim().replace(/\/+$/, '');
+    return now - coordinator.lastSeen < HEARTBEAT_TIMEOUT
+      && !excludedIds.has(coordinator.coordinatorId)
+      && !excludedUrls.has(publicUrl);
+  });
   if (vivos.length === 0) {
     return res.status(503).json({ error: 'no_coordinators_available' });
   }

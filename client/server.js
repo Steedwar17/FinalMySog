@@ -285,7 +285,11 @@ app.get('/api/auth/status', async (req, res) => {
 app.post('/api/register', (req, res) => proxyToAuth(req, res, '/register', 'POST'));
 app.post('/api/login', (req, res) => proxyToAuth(req, res, '/login', 'POST'));
 app.post('/api/auth/google', (req, res) => proxyToAuth(req, res, '/auth/google', 'POST'));
-app.get('/api/coordinator', (req, res) => proxyToAuth(req, res, '/coordinator', 'GET'));
+app.get('/api/coordinator', (req, res) => {
+  const query = new URLSearchParams(req.query).toString();
+  const pathname = query ? `/coordinator?${query}` : '/coordinator';
+  proxyToAuth(req, res, pathname, 'GET');
+});
 
 app.use(express.static(__dirname));
 

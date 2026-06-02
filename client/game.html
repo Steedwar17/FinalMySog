@@ -685,9 +685,17 @@
       }
     }
 
-    async function discoverCoordinator({ allowFallback = true } = {}) {
+    async function discoverCoordinator({ allowFallback = true, excludeCoordinator = null } = {}) {
       try {
-        const res = await fetch(`${API_URL}/coordinator`, {
+        const params = new URLSearchParams();
+        if (excludeCoordinator && excludeCoordinator.coordinatorId) {
+          params.set('excludeCoordinatorId', excludeCoordinator.coordinatorId);
+        }
+        if (excludeCoordinator && excludeCoordinator.wsUrl) {
+          params.set('excludeUrl', excludeCoordinator.wsUrl);
+        }
+        const coordinatorUrl = `${API_URL}/coordinator${params.toString() ? `?${params}` : ''}`;
+        const res = await fetch(coordinatorUrl, {
           headers: {
             Authorization: `Bearer ${token}`,
             'ngrok-skip-browser-warning': 'true',
@@ -957,7 +965,10 @@
       let lastTarget = null;
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const target = await discoverCoordinator({ allowFallback: false });
+        const target = await discoverCoordinator({
+          allowFallback: false,
+          excludeCoordinator: previousCoordinator
+        });
         lastTarget = target;
         if (!isSameCoordinator(target, previousCoordinator)) return target;
         await delay(500);
@@ -980,11 +991,9 @@
         connectToCoordinator(target);
         showAlert(`Reconectado a ${target.coordinatorId}`);
       } catch (err) {
-        showAlert('No se pudo reconectar. Intenta de nuevo.');
-        setTimeout(() => {
-          localStorage.removeItem('token');
-          localStorage.removeItem('username');
-          window.location.href = 'login.html';
+        showAlert('No hay otro coordinador disponible todavia. Reintentando...');
+        reconnectTimer = setTimeout(() => {
+          reconnectAfterUnexpectedClose();
         }, 1800);
       } finally {
         reconnecting = false;

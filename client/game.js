@@ -260,19 +260,88 @@ export function createGame(config) {
       ctx.fill();
     }
 
+    drawChampionsStyleBall(ball.x, ball.y, radius);
+    ctx.restore();
+  }
+
+  function drawChampionsStyleBall(x, y, radius) {
+    ctx.save();
+
+    const body = ctx.createRadialGradient(
+      x - radius * 0.35,
+      y - radius * 0.45,
+      radius * 0.18,
+      x,
+      y,
+      radius
+    );
+    body.addColorStop(0, '#ffffff');
+    body.addColorStop(0.62, '#f4f7ff');
+    body.addColorStop(1, '#cfd8ef');
+
     ctx.beginPath();
-    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = ball.color || '#f7f2d2';
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = body;
     ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#1a1a2e';
+    ctx.clip();
+
+    ctx.strokeStyle = '#102f73';
+    ctx.lineWidth = Math.max(1.2, radius * 0.12);
+    for (let i = 0; i < 5; i++) {
+      const angle = -Math.PI / 2 + i * (Math.PI * 2 / 5);
+      const sx = x + Math.cos(angle) * radius * 0.56;
+      const sy = y + Math.sin(angle) * radius * 0.56;
+      drawStar(sx, sy, radius * 0.32, radius * 0.13, angle + Math.PI / 2, '#153b91', '#e9f0ff');
+
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.quadraticCurveTo(
+        x + Math.cos(angle + 0.32) * radius * 0.48,
+        y + Math.sin(angle + 0.32) * radius * 0.48,
+        sx,
+        sy
+      );
+      ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = '#f8fbff';
+    ctx.fill();
+    ctx.lineWidth = Math.max(0.8, radius * 0.08);
+    ctx.strokeStyle = '#153b91';
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(ball.x - radius * 0.25, ball.y - radius * 0.25, radius * 0.28, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.arc(x - radius * 0.28, y - radius * 0.32, radius * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
     ctx.fill();
+
     ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.stroke();
+  }
+
+  function drawStar(x, y, outerRadius, innerRadius, rotation, fill, stroke) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const radius = i % 2 === 0 ? outerRadius : innerRadius;
+      const angle = rotation + i * Math.PI / 5;
+      const px = x + Math.cos(angle) * radius;
+      const py = y + Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.lineWidth = Math.max(0.6, outerRadius * 0.09);
+    ctx.strokeStyle = stroke;
+    ctx.stroke();
   }
 
   function drawItems(items) {
@@ -371,36 +440,77 @@ export function createGame(config) {
     ctx.arc(x, y, radius - 1, 0, Math.PI * 2);
     ctx.clip();
 
-    const stripeWidth = Math.max(5, radius * 0.34);
-    ctx.lineWidth = stripeWidth;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-    for (let offset = -radius * 1.2; offset <= radius * 1.2; offset += stripeWidth * 1.65) {
-      ctx.beginPath();
-      ctx.moveTo(x + offset, y - radius);
-      ctx.lineTo(x + offset, y + radius);
-      ctx.stroke();
+    const stripeCount = 7;
+    const left = x - radius;
+    const stripeWidth = (radius * 2) / stripeCount;
+    const lightColor = lightenColor(color, 0.58);
+
+    for (let index = 0; index < stripeCount; index++) {
+      ctx.fillStyle = index % 2 === 0 ? color : lightColor;
+      ctx.fillRect(left + index * stripeWidth, y - radius, stripeWidth + 0.8, radius * 2);
     }
 
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
-    for (let offset = -radius * 0.8; offset <= radius; offset += stripeWidth * 1.65) {
-      ctx.beginPath();
-      ctx.moveTo(x + offset + stripeWidth * 0.65, y - radius);
-      ctx.lineTo(x + offset + stripeWidth * 0.65, y + radius);
-      ctx.stroke();
-    }
-
-    ctx.beginPath();
-    ctx.arc(x, y - radius * 0.56, radius * 0.34, 0, Math.PI);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.14;
-    ctx.fillRect(x - radius, y + radius * 0.18, radius * 2, radius * 0.18);
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(x - radius, y + radius * 0.18, radius * 2, radius * 0.14);
+    ctx.globalAlpha = 1;
     ctx.restore();
+  }
+
+  function lightenColor(color, amount) {
+    const rgb = parseColor(color);
+    if (!rgb) return 'rgba(255, 255, 255, 0.72)';
+    const mix = (value) => Math.round(value + (255 - value) * amount);
+    return `rgb(${mix(rgb.r)}, ${mix(rgb.g)}, ${mix(rgb.b)})`;
+  }
+
+  function parseColor(color) {
+    if (typeof color !== 'string') return null;
+
+    const hex = color.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (hex) {
+      const raw = hex[1].length === 3
+        ? hex[1].split('').map((part) => part + part).join('')
+        : hex[1];
+      return {
+        r: parseInt(raw.slice(0, 2), 16),
+        g: parseInt(raw.slice(2, 4), 16),
+        b: parseInt(raw.slice(4, 6), 16)
+      };
+    }
+
+    const hsl = color.trim().match(/^hsl\(([-\d.]+),\s*([-\d.]+)%?,\s*([-\d.]+)%?\)$/i);
+    if (hsl) {
+      return hslToRgb(Number(hsl[1]), Number(hsl[2]) / 100, Number(hsl[3]) / 100);
+    }
+
+    return null;
+  }
+
+  function hslToRgb(h, s, l) {
+    const hue = ((h % 360) + 360) % 360 / 360;
+    if (s === 0) {
+      const value = Math.round(l * 255);
+      return { r: value, g: value, b: value };
+    }
+
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const toRgb = (t) => {
+      let wrapped = t;
+      if (wrapped < 0) wrapped += 1;
+      if (wrapped > 1) wrapped -= 1;
+      if (wrapped < 1 / 6) return p + (q - p) * 6 * wrapped;
+      if (wrapped < 1 / 2) return q;
+      if (wrapped < 2 / 3) return p + (q - p) * (2 / 3 - wrapped) * 6;
+      return p;
+    };
+
+    return {
+      r: Math.round(toRgb(hue + 1 / 3) * 255),
+      g: Math.round(toRgb(hue) * 255),
+      b: Math.round(toRgb(hue - 1 / 3) * 255)
+    };
   }
 
   function drawHealthBar(x, y, hp, maxHp) {
