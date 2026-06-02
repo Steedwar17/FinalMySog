@@ -8,6 +8,7 @@ const url = require('url');
 // ─── Variables de entorno ─────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET;
 const PORT = process.env.PORT || 5001;
+const COORDINATOR_ID = process.env.COORDINATOR_ID || process.env.INSTANCE_ID || `coordinator-${PORT}`;
 
 if (!JWT_SECRET) {
   console.error('[ERROR] JWT_SECRET no está definido en .env');
@@ -28,6 +29,7 @@ const app = express();
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
+    coordinatorId: COORDINATOR_ID,
     connectedPlayers: players.size,
     uptime: process.uptime(),
     tickRate: TICK_RATE,
@@ -155,6 +157,7 @@ wss.on('connection', (ws, payload) => {
 
   ws.send(JSON.stringify({
     type: 'welcome',
+    coordinatorId: COORDINATOR_ID,
     you: { userId, username },
     world: {
       width:        WORLD_WIDTH,

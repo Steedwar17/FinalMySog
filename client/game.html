@@ -647,6 +647,7 @@
     let pingTimer  = null;
     let reconnectTimer = null;
     let manualClose = false;
+    let reconnecting = false;
     let currentCoordinator = null;
     let authRefreshInFlight = false;
     let teamSelectionLocked = false;
@@ -684,7 +685,7 @@
       }
     }
 
-    async function discoverCoordinator() {
+    async function discoverCoordinator({ allowFallback = true } = {}) {
       try {
         const res = await fetch(`${API_URL}/coordinator`, {
           headers: {
@@ -710,7 +711,7 @@
           wsUrl: toWebSocketUrl(publicUrl)
         };
       } catch (err) {
-        if (!FALLBACK_COORDINATOR_WS) {
+        if (!allowFallback || !FALLBACK_COORDINATOR_WS) {
           throw err;
         }
         return {
@@ -770,13 +771,19 @@
         };
       }
 
+      connectToCoordinator(target);
+    }
+
+    function connectToCoordinator(target) {
       currentCoordinator = target;
-      document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      setCoordinatorDisplay(target.coordinatorId, target.wsUrl);
       setStatus('connecting', `Conectando a ${target.coordinatorId}...`);
 
-      ws = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
+      const socket = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
+      ws = socket;
 
-      ws.onopen = () => {
+      socket.onopen = () => {
+        if (socket !== ws) return;
         setStatus('connected', 'Conectado');
         hideAlert();
         startPingMonitor();
@@ -784,7 +791,8 @@
         updateRestartButton();
       };
 
-      ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (socket !== ws) return;
         let msg;
         try { msg = JSON.parse(event.data); } catch { return; }
 
@@ -795,7 +803,15 @@
 
         if (msg.type === 'welcome') {
           myUserId = msg.you.userId;
-          initGame(msg.world);
+          if (msg.coordinatorId) {
+            currentCoordinator = {
+              ...(currentCoordinator || {}),
+              coordinatorId: msg.coordinatorId
+            };
+            setCoordinatorDisplay(msg.coordinatorId, currentCoordinator.wsUrl);
+          }
+          if (!game) initGame(msg.world);
+          if (myTeam) sendTeamSelection();
           return;
         }
         if (msg.type === 'state') {
@@ -857,11 +873,11 @@
         }
       };
 
-      ws.onclose = (event) => {
+      socket.onclose = (event) => {
+        if (socket !== ws) return;
         setStatus('disconnected', 'Desconectado');
         stopPingMonitor();
 
-        if (game) { game.stop(); }
         updatePlayButton();
         updateRestartButton();
 
@@ -876,15 +892,23 @@
         }
 
         showAlert('Conexión perdida con el coordinador. Buscando otro disponible...');
-        scheduleReconnect();
+        reconnectAfterUnexpectedClose();
       };
 
-      ws.onerror = () => {
+      socket.onerror = () => {
+        if (socket !== ws) return;
         setStatus('disconnected', 'Error de conexión');
         stopPingMonitor();
         updatePlayButton();
         updateRestartButton();
       };
+    }
+
+    function setCoordinatorDisplay(coordinatorId, wsUrl = '') {
+      const el = document.getElementById('coordinator-value');
+      if (!el) return;
+      el.textContent = coordinatorId || '--';
+      el.title = wsUrl || coordinatorId || '';
     }
 
     function startPingMonitor() {
@@ -912,6 +936,58 @@
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+    }
+
+    function delay(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function isSameCoordinator(target, previous) {
+      if (!target || !previous) return false;
+      const targetId = target.coordinatorId;
+      const previousId = previous.coordinatorId;
+      if (targetId && previousId && targetId !== 'desconocido' && previousId !== 'desconocido') {
+        return targetId === previousId;
+      }
+      return target.wsUrl && previous.wsUrl && target.wsUrl === previous.wsUrl;
+    }
+
+    async function discoverReplacementCoordinator(previousCoordinator) {
+      let lastTarget = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const target = await discoverCoordinator({ allowFallback: false });
+        lastTarget = target;
+        if (!isSameCoordinator(target, previousCoordinator)) return target;
+        await delay(500);
+      }
+
+      throw new Error(`El directorio devolvio el mismo coordinador: ${lastTarget?.coordinatorId || 'desconocido'}`);
+    }
+
+    async function reconnectAfterUnexpectedClose() {
+      if (reconnecting) return;
+      reconnecting = true;
+      clearReconnectTimer();
+      showAlert('Conexion perdida. Reconectando...');
+
+      try {
+        const previousCoordinator = currentCoordinator;
+        await delay(1000);
+
+        const target = await discoverReplacementCoordinator(previousCoordinator);
+        connectToCoordinator(target);
+        showAlert(`Reconectado a ${target.coordinatorId}`);
+      } catch (err) {
+        showAlert('No se pudo reconectar. Intenta de nuevo.');
+        setTimeout(() => {
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          window.location.href = 'login.html';
+        }, 1800);
+      } finally {
+        reconnecting = false;
       }
     }
 
@@ -968,12 +1044,17 @@
       document.getElementById('btn-blue').classList.toggle('active', team === 'blue');
 
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'extras_update',
-          extras: { team }
-        }));
+        sendTeamSelection();
       }
     };
+
+    function sendTeamSelection() {
+      if (!myTeam || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: 'extras_update',
+        extras: { team: myTeam }
+      }));
+    }
 
     function teamColor(team, muted = false) {
       if (muted) return '#7f8798';
@@ -1521,7 +1602,7 @@
       clearReconnectTimer();
       if (game) game.destroy();
       stopPingMonitor();
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       window.location.href = 'login.html';
