@@ -255,10 +255,36 @@
     let ws = null;
     let reconnectTimer = null;
     let manualClose = false;
+    let reconnecting = false;
+    let currentCoordinator = null;
+    let authRefreshInFlight = false;
+
+    async function refreshAuthLeader() {
+      if (authRefreshInFlight) return;
+      authRefreshInFlight = true;
+      try {
+        const res = await fetch(`${API_URL}/coordinator`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'ngrok-skip-browser-warning': 'true',
+          }
+        });
+        updateAuthFromResponse(res);
+      } catch {
+        // Keep the last visible auth if the refresh fails.
+      } finally {
+        authRefreshInFlight = false;
+      }
+    }
+
+    setInterval(refreshAuthLeader, 1000);
 
     async function discoverCoordinator() {
       const res = await fetch(`${API_URL}/coordinator`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'ngrok-skip-browser-warning': 'true',
+        }
       });
       updateAuthFromResponse(res);
 
@@ -329,23 +355,39 @@
         };
       }
 
-      document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      connectToCoordinator(target);
+    }
+
+    function connectToCoordinator(target) {
+      currentCoordinator = target;
+      setCoordinatorDisplay(target.coordinatorId, target.wsUrl);
       setStatus('connecting', `Conectando a ${target.coordinatorId}...`);
 
-      ws = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
+      const socket = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
+      ws = socket;
 
-      ws.onopen = () => {
+      socket.onopen = () => {
+        if (socket !== ws) return;
         setStatus('connected', 'Conectado');
         hideAlert();
       };
 
-      ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (socket !== ws) return;
         const msg = JSON.parse(event.data);
+        if (msg.type === 'welcome' && msg.coordinatorId) {
+          currentCoordinator = {
+            ...(currentCoordinator || {}),
+            coordinatorId: msg.coordinatorId
+          };
+          setCoordinatorDisplay(msg.coordinatorId, currentCoordinator.wsUrl);
+        }
         if (msg.type === 'players_update') {
           renderPlayers(msg.players);
         }
       };
-      ws.onclose = (event) => {
+      socket.onclose = (event) => {
+        if (socket !== ws) return;
         setStatus('disconnected', 'Desconectado');
 
         if (manualClose) return;
@@ -362,13 +404,21 @@
           showAlert('Conexión perdida con el coordinador. Buscando otro disponible...');
         }
 
-        scheduleReconnect();
+        reconnectAfterUnexpectedClose();
       };
 
-      ws.onerror = () => {
+      socket.onerror = () => {
+        if (socket !== ws) return;
         setStatus('disconnected', 'Error de conexión');
       };
     }
+    function setCoordinatorDisplay(coordinatorId, wsUrl = '') {
+      const el = document.getElementById('coordinator-value');
+      if (!el) return;
+      el.textContent = coordinatorId || '--';
+      el.title = wsUrl || coordinatorId || '';
+    }
+
     function renderPlayers(players) {
       const list = document.getElementById('players-list');
       const countEl = document.getElementById('player-count');
@@ -398,7 +448,7 @@
     function logout() {
       manualClose = true;
       clearReconnectTimer();
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState !== WebSocket.CLOSED) {
         ws.close();
       }
       localStorage.removeItem('token');
@@ -432,6 +482,58 @@
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+    }
+
+    function delay(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function isSameCoordinator(target, previous) {
+      if (!target || !previous) return false;
+      const targetId = target.coordinatorId;
+      const previousId = previous.coordinatorId;
+      if (targetId && previousId && targetId !== 'desconocido' && previousId !== 'desconocido') {
+        return targetId === previousId;
+      }
+      return target.wsUrl && previous.wsUrl && target.wsUrl === previous.wsUrl;
+    }
+
+    async function discoverReplacementCoordinator(previousCoordinator) {
+      let lastTarget = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const target = await discoverCoordinator();
+        lastTarget = target;
+        if (!isSameCoordinator(target, previousCoordinator)) return target;
+        await delay(500);
+      }
+
+      throw new Error(`El directorio devolvio el mismo coordinador: ${lastTarget?.coordinatorId || 'desconocido'}`);
+    }
+
+    async function reconnectAfterUnexpectedClose() {
+      if (reconnecting) return;
+      reconnecting = true;
+      clearReconnectTimer();
+      showAlert('Conexion perdida. Reconectando...');
+
+      try {
+        const previousCoordinator = currentCoordinator;
+        await delay(1000);
+
+        const target = await discoverReplacementCoordinator(previousCoordinator);
+        connectToCoordinator(target);
+        showAlert(`Reconectado a ${target.coordinatorId}`);
+      } catch (err) {
+        showAlert('No se pudo reconectar. Intenta de nuevo.');
+        setTimeout(() => {
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          window.location.href = 'login.html';
+        }, 1800);
+      } finally {
+        reconnecting = false;
       }
     }
 

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Espectador - Videojuego Multijugador</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      background: #0f0f1a;
+      color: #e0e0ff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: #1a1a2e;
+      border-bottom: 1px solid #2a2a3e;
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .logo { color: #7b68ee; font-weight: 800; }
+    .badge {
+      background: #2a2a3e;
+      border: 1px solid #7b68ee;
+      border-radius: 18px;
+      padding: 0.35rem 0.8rem;
+      color: #e0e0ff;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+    main {
+      flex: 1;
+      display: flex;
+      gap: 1rem;
+      padding: 1rem;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    #game-canvas {
+      display: block;
+      border: 2px solid #2a2a3e;
+      border-radius: 8px;
+      max-width: 100%;
+      height: auto;
+    }
+    .side-panel {
+      width: 280px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .panel-box {
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .panel-box h3 {
+      color: #aaa;
+      font-size: 0.85rem;
+      margin-bottom: 0.75rem;
+      text-transform: uppercase;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      color: #aaa;
+      font-size: 0.8rem;
+      margin-top: 0.55rem;
+    }
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #ffaa44;
+      display: inline-block;
+      margin-right: 0.4rem;
+    }
+    .status-dot.connected { background: #44ff88; box-shadow: 0 0 5px #44ff88; }
+    .status-dot.disconnected { background: #ff4444; box-shadow: 0 0 5px #ff4444; }
+    .scoreboard {
+      display: flex;
+      justify-content: space-around;
+      text-align: center;
+    }
+    .score-label { color: #aaa; font-size: 0.75rem; font-weight: 700; }
+    .score-count { display: block; color: #e0e0ff; font-size: 1.6rem; font-weight: 800; }
+    .chat-log {
+      height: 190px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      font-size: 0.78rem;
+    }
+    .chat-line {
+      background: #14142a;
+      border-radius: 8px;
+      padding: 0.45rem 0.55rem;
+      overflow-wrap: anywhere;
+    }
+    .chat-author { color: #7b68ee; font-weight: 700; }
+    .empty { color: #555; font-size: 0.82rem; }
+    @media (max-width: 920px) {
+      main { flex-direction: column; align-items: stretch; }
+      .side-panel { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">Multijugador</div>
+    <div class="badge">MODO ESPECTADOR</div>
+  </header>
+
+  <main>
+    <canvas id="game-canvas"></canvas>
+    <aside class="side-panel">
+      <div class="panel-box">
+        <h3>Conexion</h3>
+        <div><span class="status-dot" id="status-dot"></span><span id="status-text">Buscando coordinador...</span></div>
+        <div class="status-row"><span>Coordinador</span><strong id="coordinator-value">--</strong></div>
+        <div class="status-row"><span>Jugadores</span><strong id="player-count">0</strong></div>
+      </div>
+
+      <div class="panel-box">
+        <h3>Marcador</h3>
+        <div class="scoreboard">
+          <div><span class="score-label">Rojos</span><span class="score-count" id="score-red">0</span></div>
+          <div><span class="score-label">Azules</span><span class="score-count" id="score-blue">0</span></div>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <h3>Chat</h3>
+        <div class="chat-log" id="chat-log"><div class="empty">Sin mensajes</div></div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/config.js"></script>
+  <script type="module">
+    import { createGame } from './game.js';
+
+    const API_URL = window.API_BASE_URL || '/api';
+    const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
+    const SPECTATOR_WS_PATH = normalizePath(window.SPECTATOR_WS_PATH || '/spectator');
+    const chatMessages = [];
+    let ws = null;
+    let reconnectTimer = null;
+    let game = null;
+    window.lastState = null;
+
+    connect();
+
+    async function discoverCoordinator() {
+      try {
+        const res = await fetch(`${API_URL}/coordinator`, {
+          headers: { 'ngrok-skip-browser-warning': 'true' }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || data.message || 'Sin coordinador publico.');
+
+        const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
+        if (!publicUrl) throw new Error('El directorio no devolvio URL de coordinador.');
+        return {
+          coordinatorId: data.coordinatorId || data.id || 'publico',
+          wsUrl: toWebSocketUrl(publicUrl)
+        };
+      } catch (err) {
+        if (!FALLBACK_COORDINATOR_WS) throw err;
+        return { coordinatorId: 'fallback', wsUrl: FALLBACK_COORDINATOR_WS };
+      }
+    }
+
+    async function connect() {
+      clearReconnectTimer();
+      setStatus('connecting', 'Buscando coordinador...');
+
+      let target;
+      try {
+        target = await discoverCoordinator();
+      } catch (err) {
+        setStatus('disconnected', err.message);
+        scheduleReconnect();
+        return;
+      }
+
+      document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      ws = new WebSocket(`${target.wsUrl}${SPECTATOR_WS_PATH}`);
+
+      ws.onopen = () => setStatus('connected', 'Conectado como espectador');
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+
+        if (msg.type === 'welcome' && msg.world) {
+          initGame(msg.world);
+          return;
+        }
+        if (msg.type === 'state') {
+          window.lastState = enrichState(msg);
+          updatePanel(window.lastState);
+          if (!game) initGame(msg.world || {});
+          return;
+        }
+        if (msg.type === 'chat_history') {
+          replaceChatMessages(msg.messages || []);
+          return;
+        }
+        if (msg.type === 'chat' || msg.type === 'chat_message') {
+          appendChatMessage(msg.message || msg);
+        }
+      };
+      ws.onclose = () => {
+        setStatus('disconnected', 'Desconectado. Reintentando...');
+        scheduleReconnect();
+      };
+      ws.onerror = () => setStatus('disconnected', 'Error de conexion');
+    }
+
+    function initGame(world) {
+      if (game) return;
+      game = createGame({
+        canvas: document.getElementById('game-canvas'),
+        onIntent: () => {},
+        getRenderState: () => window.lastState,
+        localPlayerId: null,
+        options: {
+          worldWidth: world.width || 800,
+          worldHeight: world.height || 600,
+          playerRadius: world.playerRadius || 20,
+          inputEnabled: false
+        }
+      });
+      game.start();
+    }
+
+    function enrichState(state) {
+      return {
+        ...state,
+        players: (state.players || []).map(p => ({
+          ...p,
+          extras: {
+            ...(p.extras || {}),
+            color: teamColor(p.extras && p.extras.team)
+          }
+        }))
+      };
+    }
+
+    function updatePanel(state) {
+      document.getElementById('player-count').textContent = String((state.players || []).length);
+      const score = readScore(state);
+      document.getElementById('score-red').textContent = String(score.red);
+      document.getElementById('score-blue').textContent = String(score.blue);
+    }
+
+    function readScore(state) {
+      const score = (state && (state.score || (state.game && state.game.score))) || {};
+      if (Number.isFinite(score.red) || Number.isFinite(score.blue)) {
+        return {
+          red: Number.isFinite(score.red) ? score.red : 0,
+          blue: Number.isFinite(score.blue) ? score.blue : 0
+        };
+      }
+      return { red: 0, blue: 0 };
+    }
+
+    function replaceChatMessages(messages) {
+      chatMessages.length = 0;
+      messages.slice(-40).forEach(message => chatMessages.push(normalizeChatMessage(message)));
+      renderChat();
+    }
+
+    function appendChatMessage(message) {
+      chatMessages.push(normalizeChatMessage(message));
+      if (chatMessages.length > 40) chatMessages.shift();
+      renderChat();
+    }
+
+    function normalizeChatMessage(message) {
+      const payload = message || {};
+      return {
+        username: payload.username || payload.author || payload.from || 'Jugador',
+        text: String(payload.text || payload.body || payload.message || '').slice(0, 160)
+      };
+    }
+
+    function renderChat() {
+      const log = document.getElementById('chat-log');
+      if (!chatMessages.length) {
+        log.innerHTML = '<div class="empty">Sin mensajes</div>';
+        return;
+      }
+      log.innerHTML = chatMessages.map(message => `
+        <div class="chat-line">
+          <span class="chat-author">${escapeHtml(message.username)}:</span>
+          ${escapeHtml(message.text)}
+        </div>
+      `).join('');
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setStatus(state, text) {
+      document.getElementById('status-dot').className = `status-dot ${state}`;
+      document.getElementById('status-text').textContent = text;
+    }
+
+    function scheduleReconnect() {
+      clearReconnectTimer();
+      reconnectTimer = setTimeout(connect, 1800);
+    }
+
+    function clearReconnectTimer() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
+
+    function normalizePath(path) {
+      const clean = String(path || '/spectator').trim();
+      return clean.startsWith('/') ? clean : `/${clean}`;
+    }
+
+    function toWebSocketUrl(url) {
+      const cleanUrl = url.replace(/\/+$/, '');
+      if (cleanUrl.startsWith('ws://') || cleanUrl.startsWith('wss://')) return cleanUrl;
+      if (cleanUrl.startsWith('https://')) return 'wss://' + cleanUrl.slice('https://'.length);
+      if (cleanUrl.startsWith('http://')) return 'ws://' + cleanUrl.slice('http://'.length);
+      return cleanUrl;
+    }
+
+    function teamColor(team) {
+      if (team === 'red') return '#ff4444';
+      if (team === 'blue') return '#4466ff';
+      return null;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.appendChild(document.createTextNode(text));
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>
