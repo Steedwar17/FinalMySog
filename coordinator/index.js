@@ -23,15 +23,15 @@ if (!JWT_SECRET) { console.error('[ERROR] JWT_SECRET no definido'); process.exit
 const WORLD_WIDTH        = 1200;
 const WORLD_HEIGHT       = 800;
 const PLAYER_RADIUS      = 20;
-const PLAYER_SPEED       = 220;
+const PLAYER_SPEED       = 60;
 const BALL_RADIUS        = 12;
 const BALL_FRICTION      = 0.985;
-const BALL_MIN_SPEED     = 400;   // velocidad mínima al chocar con jugador
+const BALL_MIN_SPEED     = 400;   
 const GOAL_WIDTH         = 160;
 const TEAM_SELECTION_SEC = 10;
 const HALF_DURATION_SEC  = 90;
 const HALFTIME_SEC       = 15;
-const TICK_RATE          = parseInt(process.env.TICK_RATE || '20', 10);
+const TICK_RATE          = parseInt(process.env.TICK_RATE || '60', 10);
 const TICK_MS            = 1000 / TICK_RATE;
 const MAX_CHAT_MSGS      = 40;
 const MAX_CHAT_LEN       = 200;
@@ -1481,7 +1481,6 @@ server.listen(PORT, () => {
   console.log(`     Espectadores: ws://localhost:${PORT}/spectator`);
   console.log(`     Peers       : ws://localhost:${PORT}/peer`);
   console.log(`     Health      : http://localhost:${PORT}/health`);
-
   setTimeout(discoverPeers, 1000);
   setInterval(discoverPeers, 5000);
 });
