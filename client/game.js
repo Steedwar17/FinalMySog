@@ -330,7 +330,6 @@ export function createGame(config) {
     ctx.arc(drawPos.x, drawPos.y, opts.playerRadius, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
-    drawJerseyStripes(drawPos.x, drawPos.y, opts.playerRadius, color);
 
     // Borde (más grueso si es el jugador local)
     ctx.lineWidth = isLocal ? 3 : 1.5;
@@ -362,44 +361,6 @@ export function createGame(config) {
       ctx.fillText('OUT', drawPos.x, drawPos.y + 4);
     }
 
-    ctx.restore();
-  }
-
-  function drawJerseyStripes(x, y, radius, color) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(x, y, radius - 1, 0, Math.PI * 2);
-    ctx.clip();
-
-    const stripeWidth = Math.max(5, radius * 0.34);
-    ctx.lineWidth = stripeWidth;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-    for (let offset = -radius * 1.2; offset <= radius * 1.2; offset += stripeWidth * 1.65) {
-      ctx.beginPath();
-      ctx.moveTo(x + offset, y - radius);
-      ctx.lineTo(x + offset, y + radius);
-      ctx.stroke();
-    }
-
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
-    for (let offset = -radius * 0.8; offset <= radius; offset += stripeWidth * 1.65) {
-      ctx.beginPath();
-      ctx.moveTo(x + offset + stripeWidth * 0.65, y - radius);
-      ctx.lineTo(x + offset + stripeWidth * 0.65, y + radius);
-      ctx.stroke();
-    }
-
-    ctx.beginPath();
-    ctx.arc(x, y - radius * 0.56, radius * 0.34, 0, Math.PI);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.14;
-    ctx.fillRect(x - radius, y + radius * 0.18, radius * 2, radius * 0.18);
     ctx.restore();
   }
 

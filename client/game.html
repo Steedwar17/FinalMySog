@@ -1198,23 +1198,15 @@
       const button = document.getElementById('btn-play');
       if (!button) return;
 
-      const match = readMatch(window.lastState || {});
-      const canShow = connectedPlayerCount >= 2 && (isMatchWaiting(match) || isMatchFinished(match, window.lastState || {}));
+      const canShow = connectedPlayerCount >= 2 && isMatchWaiting(readMatch(window.lastState || {}));
       button.classList.toggle('visible', canShow);
       button.disabled = forceDisabled || !canShow || !ws || ws.readyState !== WebSocket.OPEN;
-      button.textContent = connectedPlayerCount >= 2
-        ? isMatchFinished(match, window.lastState || {}) ? 'Jugar otra vez' : 'Jugar'
-        : 'Esperando jugadores';
+      button.textContent = connectedPlayerCount >= 2 ? 'Jugar' : 'Esperando jugadores';
     }
 
     function isMatchWaiting(match) {
       const status = String((match && match.status) || (window.lastState && window.lastState.status) || 'waiting').toLowerCase();
       return status === '' || status === 'waiting' || status === 'ready';
-    }
-
-    function isMatchFinished(match, state = window.lastState || {}) {
-      const status = String((match && match.status) || state.status || '').toLowerCase();
-      return status === 'finished' || status === 'ended' || status === 'final';
     }
 
     function isMatchActive(match, state = window.lastState || {}) {
@@ -1476,8 +1468,7 @@
         showAlert('Se necesitan al menos 2 jugadores para jugar.');
         return;
       }
-      const match = readMatch(window.lastState || {});
-      if (!isMatchWaiting(match) && !isMatchFinished(match, window.lastState || {})) {
+      if (!isMatchWaiting(readMatch(window.lastState || {}))) {
         showAlert('La partida ya fue iniciada.');
         return;
       }
