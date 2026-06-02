@@ -243,17 +243,16 @@
 
     async function discoverCoordinator() {
       try {
-        // Intentar primero el endpoint público (sin autenticación)
         const res = await fetch(`${API_URL}/coordinator-public`, {
           headers: { 'ngrok-skip-browser-warning': 'true' }
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || data.message || 'Sin coordinador publico.');
+        if (!res.ok) throw new Error(data.error || 'Sin coordinador.');
 
-        const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
-        if (!publicUrl) throw new Error('El directorio no devolvio URL de coordinador.');
+        const publicUrl = data.publicUrl || data.url || data.wsUrl;
+        if (!publicUrl) throw new Error('Sin URL de coordinador.');
         return {
-          coordinatorId: data.coordinatorId || data.id || 'publico',
+          coordinatorId: data.coordinatorId || 'publico',
           wsUrl: toWebSocketUrl(publicUrl)
         };
       } catch (err) {
@@ -279,7 +278,7 @@
 
       document.getElementById('coordinator-value').textContent = target.coordinatorId;
       document.getElementById('coordinator-id').textContent = target.coordinatorId;
-      ws = new WebSocket(`${target.wsUrl}${SPECTATOR_WS_PATH}`);
+      ws = new WebSocket(buildSpectatorWsUrl(target.wsUrl));
 
       ws.onopen = () => setStatus('connected', 'Conectado como espectador');
       ws.onmessage = (event) => {
@@ -287,6 +286,8 @@
         try { msg = JSON.parse(event.data); } catch { return; }
 
         if (msg.type === 'welcome' && msg.world) {
+          window.lastState = window.lastState || initialState(msg.world);
+          updatePanel(window.lastState);
           initGame(msg.world);
           return;
         }
@@ -302,6 +303,17 @@
         }
         if (msg.type === 'chat' || msg.type === 'chat_message') {
           appendChatMessage(msg.message || msg);
+          return;
+        }
+        if (msg.type === 'match_event') {
+          appendChatMessage({
+            username: 'Partido',
+            text: msg.message || 'Evento de partida recibido.'
+          });
+          return;
+        }
+        if (msg.type === 'players_update') {
+          document.getElementById('player-count').textContent = String((msg.players || []).length);
         }
       };
       ws.onclose = () => {
@@ -358,6 +370,26 @@
         };
       }
       return { red: 0, blue: 0 };
+    }
+
+    function initialState(world) {
+      const width = Number.isFinite(world && world.width) ? world.width : 800;
+      const height = Number.isFinite(world && world.height) ? world.height : 600;
+      return {
+        type: 'state',
+        players: [],
+        ball: {
+          x: width / 2,
+          y: height / 2,
+          vx: 0,
+          vy: 0,
+          radius: Number.isFinite(world && world.ballRadius) ? world.ballRadius : 12
+        },
+        score: { red: 0, blue: 0 },
+        match: { status: 'waiting' },
+        zones: [],
+        items: []
+      };
     }
 
     function replaceChatMessages(messages) {
@@ -425,6 +457,11 @@
       return cleanUrl;
     }
 
+    function buildSpectatorWsUrl(url) {
+      const wsUrl = toWebSocketUrl(url);
+      return wsUrl.endsWith(SPECTATOR_WS_PATH) ? wsUrl : `${wsUrl}${SPECTATOR_WS_PATH}`;
+    }
+
     function teamColor(team) {
       if (team === 'red') return '#ff4444';
       if (team === 'blue') return '#4466ff';
@@ -480,7 +517,7 @@
       const wsUrl = toWebSocketUrl(url);
       document.getElementById('coordinator-value').textContent = 'Manual';
       document.getElementById('coordinator-id').textContent = url;
-      ws = new WebSocket(`${wsUrl}${SPECTATOR_WS_PATH}`);
+      ws = new WebSocket(buildSpectatorWsUrl(wsUrl));
 
       ws.onopen = () => {
         setStatus('connected', 'Conectado como espectador');
@@ -491,6 +528,8 @@
         try { msg = JSON.parse(event.data); } catch { return; }
 
         if (msg.type === 'welcome' && msg.world) {
+          window.lastState = window.lastState || initialState(msg.world);
+          updatePanel(window.lastState);
           initGame(msg.world);
           return;
         }
@@ -506,6 +545,17 @@
         }
         if (msg.type === 'chat' || msg.type === 'chat_message') {
           appendChatMessage(msg.message || msg);
+          return;
+        }
+        if (msg.type === 'match_event') {
+          appendChatMessage({
+            username: 'Partido',
+            text: msg.message || 'Evento de partida recibido.'
+          });
+          return;
+        }
+        if (msg.type === 'players_update') {
+          document.getElementById('player-count').textContent = String((msg.players || []).length);
         }
       };
       ws.onclose = () => {
@@ -517,6 +567,9 @@
         setStatus('disconnected', 'Error: No se pudo conectar a esa URL');
       };
     }
+
+    window.toggleManualForm = toggleManualForm;
+    window.connectManualUrl = connectManualUrl;
   </script>
 </body>
 </html>

@@ -113,6 +113,103 @@ function getHeaderLeaderUrl(headers) {
     || '';
 }
 
+function selectPublicCoordinator(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const directUrl = payload.publicUrl || payload.url || payload.wsUrl || payload.websocketUrl;
+  if (directUrl) {
+    return {
+      coordinatorId: payload.coordinatorId || payload.id || 'publico',
+      publicUrl: directUrl,
+    };
+  }
+
+  const peers = Array.isArray(payload.peers) ? payload.peers : [];
+  const candidates = peers
+    .map((peer) => ({
+      coordinatorId: peer.coordinatorId || peer.id || 'publico',
+      publicUrl: peer.publicUrl || peer.url || peer.wsUrl || peer.websocketUrl,
+      connectedPlayers: Number.isFinite(peer.connectedPlayers) ? peer.connectedPlayers : Infinity,
+      uptime: Number.isFinite(peer.uptime) ? peer.uptime : 0,
+    }))
+    .filter((peer) => peer.publicUrl);
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => {
+    if (a.connectedPlayers !== b.connectedPlayers) return a.connectedPlayers - b.connectedPlayers;
+    return b.uptime - a.uptime;
+  });
+
+  return {
+    coordinatorId: candidates[0].coordinatorId,
+    publicUrl: candidates[0].publicUrl,
+  };
+}
+
+async function discoverPublicCoordinatorFromAuth() {
+  const attempted = [];
+  const tried = new Set();
+  let lastError = null;
+
+  async function tryEndpoint(baseUrl, pathname) {
+    const cleanBaseUrl = normalizeBaseUrl(baseUrl);
+    const key = `${cleanBaseUrl}${pathname}`;
+    if (!cleanBaseUrl || tried.has(key)) return null;
+
+    tried.add(key);
+    attempted.push(key);
+
+    try {
+      const upstream = await fetch(authUrl(cleanBaseUrl, pathname), {
+        headers: {
+          Accept: 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        }
+      });
+      const body = await upstream.text();
+      const payload = tryParseJson(body);
+      const leaderUrl = normalizeBaseUrl(getHeaderLeaderUrl(upstream.headers) || getLeaderUrl(payload));
+
+      if ((isNotLeader(payload) || upstream.status === 421 || upstream.status === 409 || upstream.status === 503) && leaderUrl) {
+        return tryEndpoint(leaderUrl, pathname);
+      }
+
+      if (!upstream.ok) {
+        lastError = (payload && (payload.error || payload.message)) || `HTTP ${upstream.status}`;
+        return null;
+      }
+
+      const coordinator = selectPublicCoordinator(payload);
+      if (!coordinator) {
+        lastError = 'El directorio no devolvio una URL de coordinador.';
+        return null;
+      }
+
+      return {
+        baseUrl: cleanBaseUrl,
+        coordinator,
+      };
+    } catch (err) {
+      lastError = err.message;
+      console.error(`[client] Error descubriendo coordinador publico en ${cleanBaseUrl}${pathname}: ${err.message}`);
+      return null;
+    }
+  }
+
+  for (const baseUrl of uniqueAuthUrls([activeAuthUrl, ...AUTH_URLS])) {
+    const direct = await tryEndpoint(baseUrl, '/coordinator-public');
+    if (direct) return { ...direct, attempted };
+
+    const peers = await tryEndpoint(baseUrl, '/peers');
+    if (peers) return { ...peers, attempted };
+  }
+
+  const err = new Error(lastError || 'No hay coordinadores disponibles.');
+  err.attemptedAuthUrls = attempted;
+  throw err;
+}
+
 function isLeaderPayload(payload) {
   if (!payload || typeof payload !== 'object') return false;
   if (payload.isLeader === true || payload.leader === true || payload.primary === true) return true;
@@ -290,10 +387,36 @@ app.get('/api/coordinator', (req, res) => {
   const pathname = query ? `/coordinator?${query}` : '/coordinator';
   proxyToAuth(req, res, pathname, 'GET');
 });
-app.get('/api/coordinator-public', (req, res) => {
-  const query = new URLSearchParams(req.query).toString();
-  const pathname = query ? `/coordinator-public?${query}` : '/coordinator-public';
-  proxyToAuth(req, res, pathname, 'GET');
+
+// Endpoint local para espectadores (sin depender del auth-service)
+app.get('/api/coordinator-public', async (req, res) => {
+  const coordinatorUrl = COORDINATOR_WS_URL || process.env.COORDINATOR_WS_URL || '';
+  const trimmedUrl = coordinatorUrl.trim();
+  
+  if (!trimmedUrl) {
+    try {
+      const result = await discoverPublicCoordinatorFromAuth();
+      activeAuthUrl = result.baseUrl;
+      lastHealthyAuthUrl = result.baseUrl;
+      res.setHeader('X-Auth-Url', result.baseUrl);
+      res.setHeader('X-Auth-Active-Url', activeAuthUrl);
+      res.setHeader('X-Auth-Attempts', result.attempted.join(','));
+      res.json(result.coordinator);
+    } catch (err) {
+      res.status(503).json({
+        error: 'Sin coordinador disponible para espectador',
+        message: err.message,
+        attemptedAuthUrls: err.attemptedAuthUrls || [],
+      });
+    }
+    return;
+  }
+  
+  // Devolver el coordinador configurado
+  res.json({
+    coordinatorId: 'espectador-local',
+    publicUrl: trimmedUrl
+  });
 });
 
 app.use(express.static(__dirname));

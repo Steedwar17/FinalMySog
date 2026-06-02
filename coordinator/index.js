@@ -1079,11 +1079,6 @@ specWss.on('connection', (ws) => {
       }));
     }
 
-    if (msg.type === 'restart_match') {
-      restartMatch();
-      return;
-    }
-
   });
 
   ws.on('close', () => {
