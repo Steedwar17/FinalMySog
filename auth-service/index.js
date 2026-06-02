@@ -377,20 +377,21 @@ app.get('/peers', (_req, res) => {
   res.json({ peers: alive });
 });
 
-app.get('/peers', (_req, res) => {
-  console.log('[PEERS] consultado, coordinadores:', coordinators.size);
-  const now = Date.now();
-  const alive = Array.from(coordinators.values())
-    .filter(c => now - c.lastSeen < 6000)
-    .map(c => ({
-      coordinatorId: c.coordinatorId,
-      peerUrl: c.peerUrl,
-    }));
-  res.json({ peers: alive });
-});
-
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'auth-service', role, authId: AUTH_ID });
+});
+
+app.get('/status', (_req, res) => {
+  res.json({
+    authId: AUTH_ID,
+    role,
+    publicUrl: PUBLIC_URL,
+    peerUrl: PEER_URL,
+    leaderUrl: role === 'leader' ? PUBLIC_URL : leaderUrl,
+    knownPeers: Array.from(peerInfo.keys()),
+    lastAppliedSeq: getLastSeq(),
+    users: stmts.countUsers.get().count,
+  });
 });
 
 function requireLeader(req, res, next) {
@@ -441,7 +442,7 @@ app.post('/login', async (req, res) => {
     const dummyHash = '$2b$10$invalidhashtopreventtimingattackxxxxxxxxxxxxxxxxxxxxxxxxx';
     const hashToCompare = user ? user.password_hash : dummyHash;
     const match = await bcrypt.compare(password, hashToCompare);
-    if (!user || !match) return res.status(401).json({ error: 'Credenciales invalidas' });
+    if (!user || !match) return res.status(401).json({ error: 'invalid_credentials' });
     if (user.provider !== 'local') return res.status(401).json({ error: 'Este usuario debe iniciar sesion con Google' });
     console.log(`[auth] Login (local): ${user.username}`);
     return res.status(200).json({ token: emitToken(user), username: user.username });
@@ -507,7 +508,19 @@ app.post('/heartbeat', (req, res) => {
   return res.json({ ok: true });
 });
 
-app.get('/coordinator', (_req, res) => {
+app.get('/coordinator', (req, res) => {
+  // Validar JWT
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'token_required' });
+  }
+  try {
+    jwt.verify(auth.split(' ')[1], JWT_SECRET);
+  } catch(e) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+
+  // Si soy réplica, redirigir al líder
   if (role !== 'leader') {
     if (!leaderUrl) return res.status(503).json({ error: 'no_leader' });
     return res.status(503).json({ error: 'not_leader', leaderUrl });
@@ -520,11 +533,7 @@ app.get('/coordinator', (_req, res) => {
   vivos.sort((a, b) => a.connectedPlayers - b.connectedPlayers);
   const elegido = vivos[0];
   console.log(`[auth] Cliente asignado a ${elegido.coordinatorId} (${elegido.connectedPlayers} jugadores)`);
-  return res.json({
-    coordinatorId: elegido.coordinatorId,
-    publicUrl:     elegido.publicUrl,
-    wsUrl:         elegido.publicUrl,   // ← añadir esta línea
-  });
+  return res.json({ coordinatorId: elegido.coordinatorId, publicUrl: elegido.publicUrl });
 });
 
 app.use((_req, res) => {
