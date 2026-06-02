@@ -1,717 +1,247 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
-const { WebSocketServer, WebSocket } = require('ws');
+const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
 const url = require('url');
 
-const JWT_SECRET     = process.env.JWT_SECRET;
-const PORT           = process.env.PORT           || 5000;
-const COORDINATOR_ID = process.env.COORDINATOR_ID || 'coord-a';
-const PUBLIC_URL     = process.env.PUBLIC_URL     || `ws://localhost:${PORT}`;
-const PEER_URL       = process.env.PEER_URL       || `ws://localhost:${PORT}/peer`;
+const JWT_SECRET = process.env.JWT_SECRET;
+const PORT = process.env.PORT || 5001;
+const COORDINATOR_ID = process.env.COORDINATOR_ID || process.env.INSTANCE_ID || `coordinator-${PORT}`;
 
-const AUTH_URLS = process.env.AUTH_URLS
-  ? process.env.AUTH_URLS.split(',').map(u => u.trim())
-  : ['http://localhost:4000'];
+if (!JWT_SECRET) {
+  console.error('[ERROR] JWT_SECRET no esta definido en .env');
+  process.exit(1);
+}
 
-let currentLeaderUrl = AUTH_URLS[0];
+const WORLD_WIDTH = 1200;
+const WORLD_HEIGHT = 800;
+const PLAYER_RADIUS = 20;
+const PLAYER_SPEED = 200;
+const TICK_RATE = Number(process.env.TICK_RATE || 120);
+const TICK_MS = 1000 / TICK_RATE;
 
-if (!JWT_SECRET) { console.error('[ERROR] JWT_SECRET no definido'); process.exit(1); }
+const BALL_RADIUS = 12;
+const BALL_FRICTION = 0.992;
+const BALL_MAX_SPEED = 760;
+const BALL_MIN_SPEED = 8;
+const WALL_BOUNCE = 0.78;
+const GOAL_WIDTH = 18;
+const GOAL_HEIGHT = 150;
+const GOAL_LIMIT = 4;
 
-// ─── Constantes ───────────────────────────────────────────────────────────────
-const WORLD_WIDTH        = 1200;
-const WORLD_HEIGHT       = 800;
-const PLAYER_RADIUS      = 20;
-const PLAYER_SPEED       = 60;
-const BALL_RADIUS        = 12;
-const BALL_FRICTION      = 0.985;
-const BALL_MIN_SPEED     = 400;   
-const GOAL_WIDTH         = 160;
-const TEAM_SELECTION_SEC = 10;
-const HALF_DURATION_SEC  = 90;
-const HALFTIME_SEC       = 15;
-const TICK_RATE          = parseInt(process.env.TICK_RATE || '60', 10);
-const TICK_MS            = 1000 / TICK_RATE;
-const MAX_CHAT_MSGS      = 40;
-const MAX_CHAT_LEN       = 200;
-const CHAT_RATE_MS       = 1000;
-const GOAL_HP_PENALTY    = 30;
-const WIN_SCORE = 4;
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
 
-// Posiciones de spawn por equipo
-const SPAWN = {
-  red:  { x: WORLD_WIDTH * 0.25, y: WORLD_HEIGHT / 2 },
-  blue: { x: WORLD_WIDTH * 0.75, y: WORLD_HEIGHT / 2 },
-  none: { x: WORLD_WIDTH / 2,    y: WORLD_HEIGHT / 2 },
-};
-
-// ─── Estado en memoria ────────────────────────────────────────────────────────
-const players     = new Map();
-const spectators  = new Set();
-const peers       = new Map();
-const chatHistory = [];
-const chatLastMsg = new Map();
-
-const ball = { x: WORLD_WIDTH/2, y: WORLD_HEIGHT/2, vx: 0, vy: 0 };
-const score = { red: 0, blue: 0 };
+const players = new Map();
+const chatMessages = [];
 let restartVote = null;
 
-// Estado del partido
 const match = {
   status: 'waiting',
-  half: 1,
-  timeLeft: 0,
-  teamSelectionLocked: false,
+  score: { red: 0, blue: 0 },
   winner: null,
+  startedAt: null,
+  finishedAt: null,
+  teamSelectionLocked: false,
 };
 
-// ─── App HTTP ─────────────────────────────────────────────────────────────────
-const app = express();
-
-app.get('/peers', (req, res) => {
-  res.json({ coordinatorId: COORDINATOR_ID, peerUrl: PEER_URL, peers: [...peers.keys()].map(id => ({ coordinatorId: id })) });
-});
+const ball = {
+  x: WORLD_WIDTH / 2,
+  y: WORLD_HEIGHT / 2,
+  vx: 0,
+  vy: 0,
+  radius: BALL_RADIUS,
+  color: '#f7f2d2',
+};
 
 app.get('/health', (req, res) => {
-  const local = [...players.values()].filter(p => p.local).length;
-  res.json({ status: 'ok', coordinatorId: COORDINATOR_ID, localPlayers: local, spectators: spectators.size, totalPlayers: players.size, peers: [...peers.keys()], score, match, uptime: process.uptime() });
+  res.json({
+    status: 'ok',
+    coordinatorId: COORDINATOR_ID,
+    connectedPlayers: players.size,
+    uptime: process.uptime(),
+    tickRate: TICK_RATE,
+    matchStatus: match.status,
+  });
 });
 
-const server  = http.createServer(app);
-const wss     = new WebSocketServer({ noServer: true });
-const specWss = new WebSocketServer({ noServer: true });
-const peerWss = new WebSocketServer({ noServer: true });
-
-// ─── Helpers broadcast ────────────────────────────────────────────────────────
 function snapshot() {
-  return [...players.entries()].map(([userId, p]) => ({
-    userId, username: p.username,
-    x: p.x, y: p.y,
-    extras: { ...p.extras },
-    ping: p.ping || null,
+  return Array.from(players.entries()).map(([userId, p]) => ({
+    userId,
+    username: p.username,
+    x: p.x,
+    y: p.y,
+    extras: p.extras,
+    ping: p.ping,
   }));
 }
-function getActivePlayers() {
-  return [...players.entries()]
-    .filter(([_, p]) =>
-      p.extras.team &&
-      !p.extras.eliminated
-    );
-}
 
-function hasRestartTeam(p) {
-  return p && ['red', 'blue'].includes(p.extras?.team);
-}
-
-function isConnectedPlayer(p) {
-  if (!p) return false;
-  if (!p.local) return true;
-  return p.socket && p.socket.readyState === WebSocket.OPEN;
-}
-
-function getRestartPlayers() {
-  return [...players.entries()]
-    .filter(([_, p]) => hasRestartTeam(p) && isConnectedPlayer(p));
-}
-
-function fullState() {
+function matchSnapshot() {
   return {
-    type: 'state', t: Date.now(),
+    status: match.status,
+    score: { ...match.score },
+    winner: match.winner,
+    startedAt: match.startedAt,
+    finishedAt: match.finishedAt,
+    teamSelectionLocked: match.teamSelectionLocked,
+  };
+}
+
+function statePayload(now = Date.now()) {
+  return {
+    type: 'state',
+    t: now,
     players: snapshot(),
-    ball: { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy, radius: BALL_RADIUS },
-    score: { ...score },
-    match: {
-      status:              match.status,
-      half:                match.half,
-      timeLeft:            match.timeLeft,
-      teamSelectionLocked: match.teamSelectionLocked,
-      winner:              match.winner,
+    ball: {
+      x: ball.x,
+      y: ball.y,
+      vx: ball.vx,
+      vy: ball.vy,
+      speed: Math.hypot(ball.vx, ball.vy),
+      radius: ball.radius,
+      color: ball.color,
     },
-    zones: [], items: [],
+    score: { ...match.score },
+    match: matchSnapshot(),
   };
 }
 
-function logStateForUser(reason, userId, state) {
-  const player = userId
-    ? state.players.find(entry => entry.userId === userId)
-    : null;
-  const team = player?.extras?.team ?? null;
-
-  console.log(
-    `[STATE DEBUG] ${reason} userId=${userId || '-'} match.status=${state.match.status} ` +
-    `teamSelectionLocked=${state.match.teamSelectionLocked} team=${team} players=${state.players.length}`
-  );
-}
-
-function broadcastState(reason = null, userId = null) {
-  const state = fullState();
-
-  if (reason) {
-    logStateForUser(reason, userId, state);
-  }
-
-  broadcastAll(state);
-}
-
-function broadcastClients(msg) {
+function broadcast(msg) {
   const raw = JSON.stringify(msg);
-  for (const p of players.values()) {
-    if (p.local && p.socket && p.socket.readyState === WebSocket.OPEN) p.socket.send(raw);
+  for (const { socket } of players.values()) {
+    if (socket.readyState === socket.OPEN) socket.send(raw);
   }
 }
 
-function broadcastSpectators(msg) {
-  const raw = JSON.stringify(msg);
-  for (const ws of spectators) { if (ws.readyState === WebSocket.OPEN) ws.send(raw); }
-}
-
-function broadcastAll(msg) { broadcastClients(msg); broadcastSpectators(msg); }
-
-function sendToActivePlayers(message) {
-
-  const raw = JSON.stringify(message);
-
-  for (const [, player] of getActivePlayers()) {
-
-    if (
-      player.local &&
-      player.socket &&
-      player.socket.readyState === WebSocket.OPEN
-    ) {
-      player.socket.send(raw);
-    }
-  }
-}
-
-function sendToRestartPlayers(message) {
-  const raw = JSON.stringify(message);
-
-  for (const [, player] of getRestartPlayers()) {
-    if (
-      player.local &&
-      player.socket &&
-      player.socket.readyState === WebSocket.OPEN
-    ) {
-      player.socket.send(raw);
-    }
-  }
-}
-
-function restartVotePayload() {
-  if (!restartVote) return null;
-
-  return {
-    id: restartVote.id,
-    requestedBy: restartVote.requestedBy,
-    requestedByName: restartVote.requestedByName,
-    voters: [...restartVote.voters],
-    accepted: [...restartVote.accepted]
-  };
-}
-
-function broadcastRestartVotePeer(type, extra = {}) {
-  broadcastPeers({
-    type,
-    origin: COORDINATOR_ID,
-    vote: restartVotePayload(),
-    ...extra
-  });
-}
-
-function emitRestartVoteUpdate(replicate = true) {
-  if (!restartVote) return;
-
-  const message = {
-    type: 'restart_vote_update',
-    voteId: restartVote.id,
-    accepted: restartVote.accepted.size,
-    total: restartVote.voters.size
-  };
-
-  sendToRestartPlayers(message);
-
-  if (replicate) {
-    broadcastRestartVotePeer('restart_vote_update_replicate');
-  }
-}
-
-function cancelRestartVote(type, message, replicate = true) {
-  if (!restartVote) return;
-
-  const voteId = restartVote.id;
-
-  console.log(
-    `[RESTART VOTE] cancelled voteId=${voteId} type=${type} message=${message}`
-  );
-
-  sendToRestartPlayers({
-    type,
-    voteId,
-    message
-  });
-
-  if (replicate) {
-    broadcastRestartVotePeer('restart_vote_cancel_replicate', {
-      voteId,
-      clientType: type,
-      message
-    });
-  }
-
-  restartVote = null;
-}
-
-function approveRestartVote(replicate = true) {
-  if (!restartVote) return;
-
-  const voteId = restartVote.id;
-  const message = 'Todos aceptaron. Reiniciando partido...';
-
-  console.log(
-    `[RESTART VOTE] approved voteId=${voteId} accepted=${restartVote.accepted.size} total=${restartVote.voters.size}`
-  );
-
-  sendToRestartPlayers({
-    type: 'restart_vote_approved',
-    voteId,
-    message
-  });
-
-  if (replicate) {
-    broadcastRestartVotePeer('restart_vote_approved_replicate', {
-      voteId,
-      message
-    });
-  }
-
-  restartVote = null;
-  restartMatch(!replicate);
-}
-
-function reconcileRestartVote(replicate = true) {
-  if (!restartVote) return;
-
-  const connectedVoters = new Set(
-    getRestartPlayers()
-      .map(([uid]) => uid)
-      .filter(uid => restartVote.voters.has(uid))
-  );
-
-  let changed = false;
-
-  for (const uid of [...restartVote.voters]) {
-    if (!connectedVoters.has(uid)) {
-      restartVote.voters.delete(uid);
-      restartVote.accepted.delete(uid);
-      changed = true;
-    }
-  }
-
-  if (restartVote.voters.size === 0) {
-    cancelRestartVote(
-      'restart_vote_cancelled',
-      'La votacion de reinicio fue cancelada.',
-      replicate
-    );
-    return;
-  }
-
-  if (restartVote.accepted.size >= restartVote.voters.size) {
-    approveRestartVote(replicate);
-    return;
-  }
-
-  if (changed) {
-    emitRestartVoteUpdate(replicate);
-  }
-}
-
-function createRestartVote(requestedBy, requestedByName, replicate = true) {
-  const voters = getRestartPlayers().map(([uid]) => uid);
-
-  if (voters.length === 0 || !voters.includes(requestedBy)) {
-    console.log(
-      `[RESTART VOTE] rejected_create requestedBy=${requestedBy} total=${voters.length}`
-    );
-    return false;
-  }
-
-  restartVote = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    requestedBy,
-    requestedByName,
-    voters: new Set(voters),
-    accepted: new Set([requestedBy])
-  };
-
-  console.log(
-    `[RESTART VOTE] created voteId=${restartVote.id} requestedBy=${requestedByName} ` +
-    `accepted=${restartVote.accepted.size} total=${restartVote.voters.size}`
-  );
-
-  sendToRestartPlayers({
-    type: 'restart_vote_request',
-    voteId: restartVote.id,
-    requestedBy: requestedByName,
-    accepted: restartVote.accepted.size,
-    total: restartVote.voters.size
-  });
-
-  if (replicate) {
-    broadcastRestartVotePeer('restart_vote_request_replicate');
-  }
-
-  if (restartVote.accepted.size >= restartVote.voters.size) {
-    approveRestartVote(replicate);
-  }
-
-  return true;
-}
-
-function importRestartVote(vote) {
-  if (!vote || !vote.id || !Array.isArray(vote.voters)) return false;
-  if (restartVote && restartVote.id !== vote.id) return false;
-
-  restartVote = {
-    id: String(vote.id),
-    requestedBy: String(vote.requestedBy || ''),
-    requestedByName: String(vote.requestedByName || ''),
-    voters: new Set(vote.voters.map(uid => String(uid))),
-    accepted: new Set(Array.isArray(vote.accepted) ? vote.accepted.map(uid => String(uid)) : [])
-  };
-
-  return true;
+function send(ws, msg) {
+  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
 
 function broadcastPlayers() {
-  broadcastAll({
-    type: 'players_update',
-    players: [...players.entries()].map(([uid, p]) => ({
-      userId: uid,
-      username: p.username,
-      extras: { ...p.extras }
-    }))
-  });
+  const list = Array.from(players.entries()).map(([userId, p]) => ({
+    userId,
+    username: p.username,
+    extras: p.extras,
+    ping: p.ping,
+  }));
+  broadcast({ type: 'players_update', players: list });
+  console.log(`[PLAYERS] ${list.length} jugador(es):`, list.map(p => p.username));
 }
 
-function broadcastPeers(msg) {
-  const raw = JSON.stringify(msg);
-  for (const ws of peers.values()) { if (ws.readyState === WebSocket.OPEN) ws.send(raw); }
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function sendMatchEvent(message, kind = 'info') {
-  broadcastAll({ type: 'match_event', event: kind, name: kind, kind, message });
+function goalTop() {
+  return WORLD_HEIGHT / 2 - GOAL_HEIGHT / 2;
 }
 
-// ─── Chat ─────────────────────────────────────────────────────────────────────
-function addChat(username, text, ts) {
-  const msg = { username, text, ts };
-  chatHistory.push(msg);
-  if (chatHistory.length > MAX_CHAT_MSGS) chatHistory.shift();
-  return msg;
+function isPlaying() {
+  return match.status === 'playing';
 }
 
-
-// ─── Lógica del partido ───────────────────────────────────────────────────────
 function resetBall() {
-  ball.x = WORLD_WIDTH/2; ball.y = WORLD_HEIGHT/2; ball.vx = 0; ball.vy = 0;
+  ball.x = WORLD_WIDTH / 2;
+  ball.y = WORLD_HEIGHT / 2;
+  ball.vx = 0;
+  ball.vy = 0;
 }
 
-function spawnPlayers() {
-  for (const p of players.values()) {
-    const team = p.extras.team || 'none';
-    const base = SPAWN[team] || SPAWN.none;
-    const jitter = 60;
-    p.x = base.x + (Math.random()-0.5)*jitter;
-    p.y = base.y + (Math.random()-0.5)*jitter;
+function teamOf(player) {
+  return player && player.extras ? player.extras.team : null;
+}
+
+function teamPlayers(team) {
+  return Array.from(players.values()).filter(p => teamOf(p) === team);
+}
+
+function chooseSpawn(player, index) {
+  const team = teamOf(player);
+  const teammates = teamPlayers(team);
+  const slot = Math.max(0, teammates.indexOf(player));
+  const spacing = PLAYER_RADIUS * 2 + 18;
+  const centerY = WORLD_HEIGHT / 2;
+  const y = clamp(centerY + (slot - (teammates.length - 1) / 2) * spacing, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+
+  if (team === 'red') return { x: WORLD_WIDTH * 0.28, y };
+  if (team === 'blue') return { x: WORLD_WIDTH * 0.72, y };
+
+  const angle = (index / Math.max(1, players.size)) * Math.PI * 2;
+  return {
+    x: WORLD_WIDTH / 2 + Math.cos(angle) * 90,
+    y: WORLD_HEIGHT / 2 + Math.sin(angle) * 90,
+  };
+}
+
+function positionPlayersForKickoff() {
+  Array.from(players.values()).forEach((p, index) => {
+    const spawn = chooseSpawn(p, index);
+    p.x = clamp(spawn.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+    p.y = clamp(spawn.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
     p.intent = { x: 0, y: 0 };
-  }
-}
-
-function applyGoalPenalty(teamThatScored) {
-  // El equipo que recibió el gol pierde 30 hp
-  const penalizedTeam = teamThatScored === 'red' ? 'blue' : 'red';
-  for (const p of players.values()) {
-    if (p.extras.team === penalizedTeam) {
-      p.extras.hp = Math.max(0, (p.extras.hp ?? 100) - GOAL_HP_PENALTY);
-      if (p.extras.hp <= 0) p.extras.eliminated = true;
-    }
-  }
-}
-
-function checkGoal() {
-  const goalTop    = (WORLD_HEIGHT - GOAL_WIDTH) / 2;
-  const goalBottom = goalTop + GOAL_WIDTH;
-  // Arco izquierdo → anota blue
-  if (ball.x - BALL_RADIUS <= 0 && ball.y >= goalTop && ball.y <= goalBottom) return 'blue';
-  // Arco derecho → anota red
-  if (ball.x + BALL_RADIUS >= WORLD_WIDTH && ball.y >= goalTop && ball.y <= goalBottom) return 'red';
-  return null;
-}
-
-function handleGoal(scorer) {
-  score[scorer]++;
-  if (score[scorer] >= WIN_SCORE) {
-
-  match.status = 'finished';
-  match.winner = scorer;
-  match.timeLeft = 0;
-
-  resetBall();
-  match.teamSelectionLocked = true;
-
-  sendMatchEvent(
-    `¡Ganaron los ${scorer === 'red' ? 'Rojos' : 'Azules'} por alcanzar ${WIN_SCORE} goles!`,
-    'finished'
-    
-  );
-  if (match.status === 'finished') {
-  return;
-}
-
-  broadcastPeers({
-    type: 'match_replicate',
-    origin: COORDINATOR_ID,
-    match: { ...match }
   });
-
-  return;
-}
-  applyGoalPenalty(scorer);
-  const msg = `¡Gol de ${scorer === 'red' ? 'Rojos' : 'Azules'}! ${score.red}-${score.blue}`;
-  sendMatchEvent(msg, 'goal');
-  broadcastPeers({ type: 'score_replicate',  origin: COORDINATOR_ID, score: { ...score } });
-  broadcastPeers({ type: 'match_replicate',  origin: COORDINATOR_ID, match: { ...match } });
-  broadcastPeers({ type: 'players_replicate', origin: COORDINATOR_ID, players: snapshot() });
-
-  setTimeout(() => {
-    resetBall(); spawnPlayers();
-    broadcastPeers({ type: 'ball_replicate', origin: COORDINATOR_ID, ball: { x:ball.x, y:ball.y, vx:ball.vx, vy:ball.vy } });
-  }, 2000);
-}
-
-function startHalftime() {
-  match.status   = 'halftime';
-  match.timeLeft = HALFTIME_SEC;
-  resetBall(); spawnPlayers();
-  sendMatchEvent('¡Fin del primer tiempo! Entretiempo de 15 segundos.', 'halftime');
-  broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
-}
-
-function startSecondHalf() {
-  match.status   = 'playing';
-  match.half     = 2;
-  match.timeLeft = HALF_DURATION_SEC;
-  resetBall(); spawnPlayers();
-  sendMatchEvent('¡Comienza el segundo tiempo!', 'start');
-  broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
-}
-
-function endMatch() {
-  match.status = 'finished';
-  match.timeLeft = 0;
-  if (score.red > score.blue)       match.winner = 'red';
-  else if (score.blue > score.red)  match.winner = 'blue';
-  else                              match.winner = 'draw';
-  const msg = match.winner === 'draw'
-    ? '¡Empate! Partido finalizado.'
-    : `¡Ganaron los ${match.winner === 'red' ? 'Rojos' : 'Azules'}! Partido finalizado.`;
-  sendMatchEvent(msg, 'finished');
-  broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
+  resolvePlayerCollisions(6);
 }
 
 function startMatch() {
-  const previousStatus = match.status;
-
-  const connectedPlayers =
-    [...players.values()].filter(p => p.local || !p.local).length;
-
-  console.log(
-    `[START_MATCH] requested previousStatus=${previousStatus} connectedPlayers=${connectedPlayers}`
-  );
-
-  if (connectedPlayers < 2) {
-    console.log('[START_MATCH] rejected reason=not_enough_players');
-    return false;
-  }
-
-  score.red = 0;
-  score.blue = 0;
-
-  resetBall();
-
-  for (const p of players.values()) {
-    p.extras.hp = 100;
-    p.extras.maxHp = 100;
-    p.extras.eliminated = false;
-    p.intent = { x: 0, y: 0 };
-  }
-
-  spawnPlayers();
-
-  match.status = 'team_selection';
-  match.half = 1;
-  match.timeLeft = TEAM_SELECTION_SEC;
-  match.teamSelectionLocked = false;
+  match.status = 'playing';
+  match.score = { red: 0, blue: 0 };
   match.winner = null;
-
-  sendMatchEvent(
-    'Selección de equipos iniciada. Tienen 10 segundos.',
-    'prestart'
-  );
-
- broadcastPeers({
-  type: 'start_match_replicate',
-  origin: COORDINATOR_ID
-});
-
-  
-  broadcastState('after start_match');
-
-  return true;
-}
-
-function restartMatch(replicated = false) {
-
+  match.startedAt = Date.now();
+  match.finishedAt = null;
+  match.teamSelectionLocked = true;
   restartVote = null;
 
-  score.red = 0;
-  score.blue = 0;
+  resetBall();
+  positionPlayersForKickoff();
+  broadcastPlayers();
+  broadcast({
+    type: 'match_event',
+    event: 'start',
+    message: 'Partido iniciado. Gana el primero que llegue a 4 goles.',
+  });
+}
 
+function finishMatch(winner) {
+  match.status = 'finished';
+  match.winner = winner;
+  match.finishedAt = Date.now();
+  match.teamSelectionLocked = false;
+  restartVote = null;
   resetBall();
 
-  for (const p of players.values()) {
-
-    p.extras.team = null;
-
-    p.extras.hp = 100;
-
-    p.extras.maxHp = 100;
-
-    p.extras.eliminated = false;
-
-    p.extras.lateJoiner = false;
-
-    p.extras.out = false;
-
-    p.intent = {
-      x: 0,
-      y: 0
-    };
-  }
-
-  spawnPlayers();
-
-  match.status = 'waiting';
-
-  match.winner = null;
-
-  match.half = 0;
-
-  match.timeLeft = null;
-
-  match.teamSelectionLocked = false;
-
-  broadcastState('after restart_match');
-
-  broadcastPlayers();
-
-  if (!replicated) {
-
-    broadcastPeers({
-      type: 'restart_match_replicate',
-      origin: COORDINATOR_ID
-    });
-  }
+  broadcast({
+    type: 'match_event',
+    event: 'final',
+    winner,
+    message: `Partido terminado. Ganador: ${winner === 'red' ? 'Rojos' : 'Azules'}.`,
+  });
 }
 
-function updateBall(dt) {
-  ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+function registerGoal(team) {
+  if (!isPlaying()) return;
 
-  // Rebotes paredes
-  if (ball.x - BALL_RADIUS <= 0)          { ball.x = BALL_RADIUS;            ball.vx =  Math.abs(ball.vx); }
-  if (ball.x + BALL_RADIUS >= WORLD_WIDTH) { ball.x = WORLD_WIDTH-BALL_RADIUS; ball.vx = -Math.abs(ball.vx); }
-  if (ball.y - BALL_RADIUS <= 0)           { ball.y = BALL_RADIUS;            ball.vy =  Math.abs(ball.vy); }
-  if (ball.y + BALL_RADIUS >= WORLD_HEIGHT){ ball.y = WORLD_HEIGHT-BALL_RADIUS; ball.vy = -Math.abs(ball.vy); }
+  match.score[team] += 1;
+  resetBall();
+  positionPlayersForKickoff();
 
-  ball.vx *= BALL_FRICTION; ball.vy *= BALL_FRICTION;
+  broadcast({
+    type: 'match_event',
+    event: 'goal',
+    team,
+    score: { ...match.score },
+    message: `Gol de ${team === 'red' ? 'Rojos' : 'Azules'} (${match.score.red}-${match.score.blue}).`,
+  });
 
-  // Colisión jugador-pelota
-  for (const p of players.values()) {
-    if (p.extras.eliminated) continue;
-    const dx = ball.x - p.x, dy = ball.y - p.y;
-    const dist = Math.hypot(dx, dy);
-    const minDist = PLAYER_RADIUS + BALL_RADIUS;
-    if (dist < minDist && dist > 0) {
-      const nx = dx/dist, ny = dy/dist;
-      // Separar pelota del jugador
-      ball.x = p.x + nx*minDist;
-      ball.y = p.y + ny*minDist;
-      // Velocidad depende de la dirección del jugador
-      const playerSpeed = Math.hypot(p.intent.x, p.intent.y);
-      const impulse = Math.max(BALL_MIN_SPEED, playerSpeed * PLAYER_SPEED * 1.5);
-      // Dirección: normal de colisión + aporte del intent del jugador
-      const dirX = nx + p.intent.x * 0.6;
-      const dirY = ny + p.intent.y * 0.6;
-      const dirLen = Math.hypot(dirX, dirY) || 1;
-      ball.vx = (dirX/dirLen) * impulse;
-      ball.vy = (dirY/dirLen) * impulse;
-    }
-  }
-
-  const scorer = checkGoal();
-  if (scorer) handleGoal(scorer);
+  if (match.score[team] >= GOAL_LIMIT) finishMatch(team);
 }
 
-// ─── Game Loop ────────────────────────────────────────────────────────────────
-let lastTick = Date.now(), tickCount = 0;
-
-function tick() {
-  const now = Date.now(), dt = (now - lastTick) / 1000;
-  lastTick = now;
-
-  // ── Máquina de estados del partido ──────────────────────────────────────────
-  if (match.status === 'team_selection') {
-    match.timeLeft = Math.max(0, match.timeLeft - dt);
-    if (match.timeLeft <= 0) {
-      match.teamSelectionLocked = true;
-      match.status   = 'playing';
-      match.half     = 1;
-      match.timeLeft = HALF_DURATION_SEC;
-      spawnPlayers();
-      console.log(
-        `[MATCH STATUS] team_selection -> playing teamSelectionLocked=${match.teamSelectionLocked} timeLeft=${match.timeLeft}`
-      );
-      sendMatchEvent('¡Equipos bloqueados! Comienza el partido.', 'start');
-      broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
-      broadcastState('after team_selection_to_playing');
-    }
-  } else if (match.status === 'playing') {
-    match.timeLeft = Math.max(0, match.timeLeft - dt);
-    if (match.timeLeft <= 0) {
-      if (match.half === 1)  startHalftime();
-      else                   endMatch();
-    }
-  } else if (match.status === 'halftime') {
-    match.timeLeft = Math.max(0, match.timeLeft - dt);
-    if (match.timeLeft <= 0) startSecondHalf();
-  }
-
-  // ── Mover jugadores ──────────────────────────────────────────────────────────
+function movePlayers(dt) {
   for (const p of players.values()) {
-   // ── Mover jugadores ──────────────────────────────────────────────────────────
-if (
-  match.status === 'playing' ||
-  match.status === 'team_selection'
-) {
-  for (const p of players.values()) {
-
-    if (p.extras.eliminated) continue;
-
     const ix = p.intent.x;
     const iy = p.intent.y;
-
     const mag = Math.hypot(ix, iy);
 
     if (mag > 0) {
@@ -719,768 +249,378 @@ if (
       p.y += (iy / mag) * PLAYER_SPEED * dt;
     }
 
-    p.x = Math.max(
-      PLAYER_RADIUS,
-      Math.min(WORLD_WIDTH - PLAYER_RADIUS, p.x)
-    );
-
-    p.y = Math.max(
-      PLAYER_RADIUS,
-      Math.min(WORLD_HEIGHT - PLAYER_RADIUS, p.y)
-    );
+    p.x = clamp(p.x, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+    p.y = clamp(p.y, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
   }
 }
 
-  // ── Física de pelota (physics leader = coord con menor ID) ───────────────────
-  const isPhysicsLeader = [...peers.keys()].every(id => COORDINATOR_ID < id) || peers.size === 0;
-  if (isPhysicsLeader && match.status === 'playing') {
-    updateBall(dt);
-    if (tickCount % 3 === 0) {
-      broadcastPeers({ type: 'ball_replicate', origin: COORDINATOR_ID, ball: { x:ball.x, y:ball.y, vx:ball.vx, vy:ball.vy } });
-    }
-  }
-  }
+function resolvePlayerCollisions(iterations = 2) {
+  const list = Array.from(players.values());
+  const minDistance = PLAYER_RADIUS * 2;
 
-  // ── Broadcast estado a todos ─────────────────────────────────────────────────
-  broadcastAll(fullState());
+  for (let pass = 0; pass < iterations; pass += 1) {
+    for (let i = 0; i < list.length; i += 1) {
+      for (let j = i + 1; j < list.length; j += 1) {
+        const a = list[i];
+        const b = list[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.hypot(dx, dy);
 
-  // ── Replicar posiciones locales a peers cada 5 ticks ────────────────────────
-  if (tickCount % 5 === 0) {
-    const lp = [];
-    for (const [uid, p] of players.entries()) { if (p.local) lp.push({ userId: uid, x: p.x, y: p.y }); }
-    if (lp.length > 0) broadcastPeers({ type: 'positions_replicate', origin: COORDINATOR_ID, players: lp });
-  }
+        if (dist >= minDistance) continue;
 
-  tickCount++;
-}
+        if (dist < 0.0001) {
+          dx = 1;
+          dy = 0;
+          dist = 1;
+        }
 
-setInterval(tick, TICK_MS);
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const overlap = minDistance - dist;
+        const push = overlap / 2 + 0.01;
 
-// ─── authFetch con fallback ───────────────────────────────────────────────────
-async function authFetch(path, options = {}) {
-  const urlsToTry = [currentLeaderUrl, ...AUTH_URLS.filter(u => u !== currentLeaderUrl)];
-  for (const base of urlsToTry) {
-    try {
-      const res = await fetch(`${base}${path}`, options);
-      if (res.status === 503) {
-        const body = await res.json().catch(() => ({}));
-        if (body.leaderUrl) { currentLeaderUrl = body.leaderUrl; return await fetch(`${currentLeaderUrl}${path}`, options); }
+        a.x = clamp(a.x - nx * push, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+        a.y = clamp(a.y - ny * push, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+        b.x = clamp(b.x + nx * push, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+        b.y = clamp(b.y + ny * push, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
       }
-      return res;
-    } catch { console.warn(`[AUTH] ${base} no disponible`); }
-  }
-  throw new Error('Ningún auth-service disponible');
-}
-
-// ─── Heartbeat ────────────────────────────────────────────────────────────────
-async function sendHeartbeat() {
-  const localPlayers = [...players.values()].filter(p => p.local).length;
-  const body = JSON.stringify({ coordinatorId: COORDINATOR_ID, publicUrl: PUBLIC_URL, peerUrl: PEER_URL, connectedPlayers: localPlayers, uptime: Math.floor(process.uptime()) });
-  for (const authUrl of AUTH_URLS) {
-    try { await fetch(`${authUrl}/heartbeat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }); }
-    catch (err) { console.warn(`[HEARTBEAT] falló para ${authUrl}: ${err.message}`); }
-  }
-}
-setInterval(sendHeartbeat, 2000); sendHeartbeat();
-
-// ─── Descubrimiento de peers ──────────────────────────────────────────────────
-async function discoverPeers() {
-  try {
-    const res = await authFetch('/peers');
-    if (!res.ok) return;
-    const { peers: peerList } = await res.json();
-    for (const peer of peerList) {
-      if (peer.coordinatorId === COORDINATOR_ID) continue;
-      if (peers.has(peer.coordinatorId)) continue;
-      if (COORDINATOR_ID < peer.coordinatorId) connectToPeer(peer.coordinatorId, peer.peerUrl);
-    }
-  } catch (err) { console.warn(`[PEERS] Error: ${err.message}`); }
-}
-
-function connectToPeer(peerId, peerUrl) {
-  // Asegurarse que la URL tenga la ruta /peer
-  const fullUrl = peerUrl.endsWith('/peer') ? peerUrl : `${peerUrl}/peer`;
-  console.log(`[PEER] Conectando a ${peerId} en ${fullUrl}`);
-  const ws = new WebSocket(fullUrl, {
-    headers: { 'ngrok-skip-browser-warning': 'true' }
-  });
-  ws.on('open', () => {
-    ws.send(JSON.stringify({ type: 'hello', coordinatorId: COORDINATOR_ID }));
-    peers.set(peerId, ws);
-    console.log(`[PEER] Conectado a ${peerId}`);
-    for (const [uid, p] of players.entries()) {
-      if (p.local) ws.send(JSON.stringify({ type: 'player_joined', origin: COORDINATOR_ID, userId: uid, username: p.username, x: p.x, y: p.y, extras: p.extras }));
-    }
-    ws.send(JSON.stringify({ type: 'score_replicate', origin: COORDINATOR_ID, score: { ...score } }));
-    ws.send(JSON.stringify({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } }));
-    ws.send(JSON.stringify({ type: 'chat_history_replicate', origin: COORDINATOR_ID, messages: chatHistory }));
-  });
-  ws.on('message', (raw) => handlePeerMessage(raw, peerId));
-  ws.on('close', () => { peers.delete(peerId); removePeerPlayers(peerId); console.log(`[PEER] Desconectado: ${peerId}`); });
-  ws.on('error', (err) => console.warn(`[PEER ERROR] ${peerId}: ${err.message}`));
-}
-
-function removePeerPlayers(peerId) {
-  let removedRestartVoter = false;
-
-  for (const [uid, p] of players.entries()) {
-    if (!p.local && p.originCoord === peerId) {
-      if (restartVote?.voters.has(uid)) removedRestartVoter = true;
-      players.delete(uid);
     }
   }
-
-  broadcastPlayers();
-
-  if (removedRestartVoter) {
-    reconcileRestartVote();
-  }
 }
 
-// ─── Mensajes entre peers ─────────────────────────────────────────────────────
-function handlePeerMessage(raw, fromPeerId) {
-  let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
-  if (msg.origin === COORDINATOR_ID) return;
+function moveBall(dt) {
+  if (!isPlaying()) return;
 
-  switch (msg.type) {
-    case 'hello': break;
-    case 'player_joined': {
-      const uid = String(msg.userId);
-      if (!players.has(uid)) {
-        players.set(uid, { username: msg.username, socket: null, local: false, originCoord: msg.origin, x: msg.x ?? WORLD_WIDTH/2, y: msg.y ?? WORLD_HEIGHT/2, intent: {x:0,y:0}, extras: msg.extras || { team: null, hp: 100, maxHp: 100, eliminated: false }, ping: null });
-        broadcastPlayers();
-      }
-      break;
-    }
-    case 'player_left': {
-      const uid = String(msg.userId);
-      if (players.has(uid) && !players.get(uid).local) { players.delete(uid); broadcastPlayers(); }
-      break;
-    }
-    case 'intent_replicate': {
-      const p = players.get(String(msg.userId));
-      if (p && msg.intent?.dir) p.intent = { x: Math.sign(msg.intent.dir.x), y: Math.sign(msg.intent.dir.y) };
-      break;
-    }
-    case 'extras_replicate': {
-      const p = players.get(String(msg.userId));
-      if (p && msg.extras) {
-        p.extras = { ...p.extras, ...msg.extras };
-        broadcastState('after peer extras_replicate', String(msg.userId));
-      }
-      break;
-    }
-    case 'ping_replicate': {
-      const p = players.get(String(msg.userId));
-      if (p) p.ping = msg.ping;
-      break;
-    }
-    case 'positions_replicate': {
-      if (!Array.isArray(msg.players)) break;
-      for (const e of msg.players) { const p = players.get(String(e.userId)); if (p && !p.local) { p.x = e.x; p.y = e.y; } }
-      break;
-    }
-    case 'players_replicate': {
-      if (!Array.isArray(msg.players)) break;
-      for (const e of msg.players) { const p = players.get(String(e.userId)); if (p) p.extras = { ...p.extras, ...e.extras }; }
-      break;
-    }
-    case 'ball_replicate': {
-      const isPhysicsLeader = [...peers.keys()].every(id => COORDINATOR_ID < id) || peers.size === 0;
-      if (!isPhysicsLeader && msg.ball) { ball.x = msg.ball.x; ball.y = msg.ball.y; ball.vx = msg.ball.vx; ball.vy = msg.ball.vy; }
-      break;
-    }
-    case 'score_replicate': { if (msg.score) { score.red = msg.score.red; score.blue = msg.score.blue; } break; }
-    case 'match_replicate': { if (msg.match) Object.assign(match, msg.match); break; }
-    case 'restart_vote_request_replicate': {
-      if (!restartVote && importRestartVote(msg.vote)) {
-        sendToRestartPlayers({
-          type: 'restart_vote_request',
-          voteId: restartVote.id,
-          requestedBy: restartVote.requestedByName,
-          accepted: restartVote.accepted.size,
-          total: restartVote.voters.size
-        });
-      }
-      break;
-    }
-    case 'restart_vote_update_replicate': {
-      if (importRestartVote(msg.vote)) {
-        emitRestartVoteUpdate(false);
-      }
-      break;
-    }
-    case 'restart_vote_cancel_replicate': {
-      if (!restartVote || (msg.voteId && restartVote.id !== msg.voteId)) break;
+  ball.x += ball.vx * dt;
+  ball.y += ball.vy * dt;
+  ball.vx *= BALL_FRICTION;
+  ball.vy *= BALL_FRICTION;
 
-      sendToRestartPlayers({
-        type: msg.clientType === 'restart_vote_cancelled'
-          ? 'restart_vote_cancelled'
-          : 'restart_vote_rejected',
-        voteId: restartVote.id,
-        message: msg.message || 'No se reinici\u00f3 el partido.'
-      });
-
-      restartVote = null;
-      break;
-    }
-    case 'restart_vote_approved_replicate': {
-      if (!restartVote || (msg.voteId && restartVote.id !== msg.voteId)) break;
-
-      sendToRestartPlayers({
-        type: 'restart_vote_approved',
-        voteId: restartVote.id,
-        message: msg.message || 'Todos aceptaron. Reiniciando partido...'
-      });
-
-      restartVote = null;
-      restartMatch(true);
-      break;
-    }
-    case 'chat_replicate': {
-      if (msg.message) { chatHistory.push(msg.message); if (chatHistory.length > MAX_CHAT_MSGS) chatHistory.shift(); broadcastAll({ type: 'chat_message', message: msg.message }); }
-      break;
-    }
-    case 'chat_history_replicate': {
-      if (chatHistory.length === 0 && Array.isArray(msg.messages)) chatHistory.push(...msg.messages.slice(-MAX_CHAT_MSGS));
-      break;
-    }
-    case 'start_match_replicate': {
-
-  if (match.status === 'waiting') {
-    startMatch();
+  const speed = Math.hypot(ball.vx, ball.vy);
+  if (speed > BALL_MAX_SPEED) {
+    const scale = BALL_MAX_SPEED / speed;
+    ball.vx *= scale;
+    ball.vy *= scale;
+  } else if (speed < BALL_MIN_SPEED) {
+    ball.vx = 0;
+    ball.vy = 0;
   }
 
-  break;
-}
-    case 'restart_match_replicate': {
-  restartMatch(true);
-  break;
-}
-  }
-}
+  const top = goalTop();
+  const insideGoalY = ball.y >= top && ball.y <= top + GOAL_HEIGHT;
 
-// ─── Peer server ──────────────────────────────────────────────────────────────
-peerWss.on('connection', (ws) => {
-  let peerId = null;
-  ws.on('message', (raw) => {
-    let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (msg.type === 'hello' && !peerId) {
-      peerId = msg.coordinatorId;
-      if (peers.has(peerId) && COORDINATOR_ID > peerId) { ws.close(); return; }
-      peers.set(peerId, ws);
-      console.log(`[PEER] ${peerId} entró al mesh`);
-      for (const [uid, p] of players.entries()) {
-        if (p.local) ws.send(JSON.stringify({ type: 'player_joined', origin: COORDINATOR_ID, userId: uid, username: p.username, x: p.x, y: p.y, extras: p.extras }));
-      }
-      ws.send(JSON.stringify({ type: 'score_replicate', origin: COORDINATOR_ID, score: { ...score } }));
-      ws.send(JSON.stringify({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } }));
-      ws.send(JSON.stringify({ type: 'chat_history_replicate', origin: COORDINATOR_ID, messages: chatHistory }));
-      return;
-    }
-    if (peerId) handlePeerMessage(raw, peerId);
-  });
-  ws.on('close', () => { if (peerId) { peers.delete(peerId); removePeerPlayers(peerId); console.log(`[PEER] ${peerId} salió del mesh`); } });
-  ws.on('error', (err) => console.warn(`[PEER SERVER ERROR] ${err.message}`));
-});
-
-// ─── Upgrade ──────────────────────────────────────────────────────────────────
-server.on('upgrade', (req, socket, head) => {
-  const { pathname, query } = url.parse(req.url, true);
-  if (pathname === '/peer') { peerWss.handleUpgrade(req, socket, head, (ws) => peerWss.emit('connection', ws, req)); return; }
-  if (pathname === '/spectator') { specWss.handleUpgrade(req, socket, head, (ws) => specWss.emit('connection', ws, req)); return; }
-  if (pathname === '/connect') {
-    const token = query.token;
-    if (!token) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
-    let payload;
-    try { payload = jwt.verify(token, JWT_SECRET); }
-    catch { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, payload));
+  if (ball.x - ball.radius <= GOAL_WIDTH && insideGoalY) {
+    registerGoal('blue');
     return;
   }
-  socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy();
+  if (ball.x + ball.radius >= WORLD_WIDTH - GOAL_WIDTH && insideGoalY) {
+    registerGoal('red');
+    return;
+  }
+
+  if (ball.x - ball.radius < 0) {
+    ball.x = ball.radius;
+    ball.vx = Math.abs(ball.vx) * WALL_BOUNCE;
+  } else if (ball.x + ball.radius > WORLD_WIDTH) {
+    ball.x = WORLD_WIDTH - ball.radius;
+    ball.vx = -Math.abs(ball.vx) * WALL_BOUNCE;
+  }
+
+  if (ball.y - ball.radius < 0) {
+    ball.y = ball.radius;
+    ball.vy = Math.abs(ball.vy) * WALL_BOUNCE;
+  } else if (ball.y + ball.radius > WORLD_HEIGHT) {
+    ball.y = WORLD_HEIGHT - ball.radius;
+    ball.vy = -Math.abs(ball.vy) * WALL_BOUNCE;
+  }
+}
+
+function resolveBallPlayerCollisions() {
+  if (!isPlaying()) return;
+
+  const minDistance = PLAYER_RADIUS + ball.radius;
+
+  for (const p of players.values()) {
+    let dx = ball.x - p.x;
+    let dy = ball.y - p.y;
+    let dist = Math.hypot(dx, dy);
+
+    if (dist >= minDistance) continue;
+
+    if (dist < 0.0001) {
+      dx = 1;
+      dy = 0;
+      dist = 1;
+    }
+
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const overlap = minDistance - dist;
+    ball.x = clamp(ball.x + nx * (overlap + 0.02), ball.radius, WORLD_WIDTH - ball.radius);
+    ball.y = clamp(ball.y + ny * (overlap + 0.02), ball.radius, WORLD_HEIGHT - ball.radius);
+
+    const intentMag = Math.hypot(p.intent.x, p.intent.y);
+    const playerVx = intentMag > 0 ? (p.intent.x / intentMag) * PLAYER_SPEED : 0;
+    const playerVy = intentMag > 0 ? (p.intent.y / intentMag) * PLAYER_SPEED : 0;
+    const approach = Math.max(0, playerVx * nx + playerVy * ny);
+    const bump = intentMag > 0 ? 240 + approach * 1.5 : 85;
+
+    ball.vx = ball.vx * 0.42 + nx * bump + playerVx * 0.35;
+    ball.vy = ball.vy * 0.42 + ny * bump + playerVy * 0.35;
+  }
+}
+
+function tick() {
+  const now = Date.now();
+  const dt = Math.min(0.05, (now - lastTick) / 1000);
+  lastTick = now;
+
+  movePlayers(dt);
+  resolvePlayerCollisions(3);
+  moveBall(dt);
+  resolveBallPlayerCollisions();
+
+  broadcast(statePayload(now));
+}
+
+function teamPlayerCount() {
+  let total = 0;
+  for (const p of players.values()) {
+    if (teamOf(p) === 'red' || teamOf(p) === 'blue') total += 1;
+  }
+  return total;
+}
+
+function restartVoters() {
+  return Array.from(players.entries())
+    .filter(([, p]) => teamOf(p) === 'red' || teamOf(p) === 'blue')
+    .map(([userId]) => userId);
+}
+
+function cancelRestartVote(message = 'No se reinicio el partido.') {
+  if (!restartVote) return;
+  const voteId = restartVote.voteId;
+  restartVote = null;
+  broadcast({ type: 'restart_vote_rejected', voteId, message });
+}
+
+function handleRestartVoteRequest(userId, username) {
+  if (!isPlaying()) return;
+
+  const total = teamPlayerCount();
+  if (total < 1) return;
+
+  restartVote = {
+    voteId: `${Date.now()}-${userId}`,
+    requestedBy: username,
+    accepted: new Set([userId]),
+    voters: new Set(restartVoters()),
+  };
+
+  broadcast({
+    type: 'restart_vote_request',
+    voteId: restartVote.voteId,
+    requestedBy: username,
+    accepted: restartVote.accepted.size,
+    total: restartVote.voters.size,
+  });
+}
+
+function handleRestartVoteResponse(userId, accepted) {
+  if (!restartVote || !restartVote.voters.has(userId)) return;
+  if (!accepted) {
+    cancelRestartVote('Un jugador rechazo el reinicio.');
+    return;
+  }
+
+  restartVote.accepted.add(userId);
+
+  if (restartVote.accepted.size >= restartVote.voters.size) {
+    const voteId = restartVote.voteId;
+    restartVote = null;
+    broadcast({ type: 'restart_vote_approved', voteId, message: 'Todos aceptaron. Reiniciando partido...' });
+    startMatch();
+    return;
+  }
+
+  broadcast({
+    type: 'restart_vote_update',
+    voteId: restartVote.voteId,
+    accepted: restartVote.accepted.size,
+    total: restartVote.voters.size,
+  });
+}
+
+function sanitizeExtras(extras) {
+  const clean = {};
+  if (extras.team === 'red' || extras.team === 'blue') clean.team = extras.team;
+  if (typeof extras.color === 'string' && extras.color.length <= 40) clean.color = extras.color;
+  return clean;
+}
+
+let lastTick = Date.now();
+setInterval(tick, TICK_MS);
+
+server.on('upgrade', (req, socket, head) => {
+  const { pathname, query } = url.parse(req.url, true);
+
+  if (pathname !== '/connect') {
+    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  const token = query.token;
+  if (!token) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  let payload;
+  try {
+    payload = jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    console.log(`[UPGRADE] Token invalido: ${err.message}`);
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, payload);
+  });
 });
 
-// ─── Espectadores ─────────────────────────────────────────────────────────────
-specWss.on('connection', (ws) => {
+wss.on('connection', (ws, payload) => {
+  const { userId, username } = payload;
+  console.log(`[CONNECT] ${username} (${userId})`);
 
-  console.log('[SPECTATOR] Conectado');
+  if (players.has(userId)) {
+    const existing = players.get(userId);
+    console.log(`[DUPLICATE] ${username} ya conectado. Cerrando sesion anterior.`);
+    existing.socket.close(4001, 'Nueva sesion iniciada en otra pestana');
+    players.delete(userId);
+  }
 
-  spectators.add(ws);
+  const startX = PLAYER_RADIUS + Math.random() * (WORLD_WIDTH - 2 * PLAYER_RADIUS);
+  const startY = PLAYER_RADIUS + Math.random() * (WORLD_HEIGHT - 2 * PLAYER_RADIUS);
 
-  ws.send(JSON.stringify({
+  players.set(userId, {
+    username,
+    socket: ws,
+    connectedAt: new Date().toISOString(),
+    x: startX,
+    y: startY,
+    intent: { x: 0, y: 0 },
+    extras: {},
+    ping: null,
+  });
+  resolvePlayerCollisions(8);
+
+  send(ws, {
     type: 'welcome',
-    you: null,
-    spectator: true,
     coordinatorId: COORDINATOR_ID,
+    you: { userId, username },
     world: {
       width: WORLD_WIDTH,
       height: WORLD_HEIGHT,
       playerRadius: PLAYER_RADIUS,
-      tickRate: TICK_RATE
-    }
-  }));
-
-  ws.send(JSON.stringify({
-    type: 'chat_history',
-    messages: chatHistory
-  }));
-
-  ws.on('message', (raw) => {
-
-    let msg;
-
-    try {
-      msg = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
-
-    if (msg.type === 'ping') {
-      ws.send(JSON.stringify({
-        type: 'pong',
-        sentAt: msg.sentAt
-      }));
-    }
-
-    if (msg.type === 'restart_match') {
-      restartMatch();
-      return;
-    }
-
+      tickRate: TICK_RATE,
+      ballRadius: BALL_RADIUS,
+      goalWidth: GOAL_WIDTH,
+      goalHeight: GOAL_HEIGHT,
+      goalLimit: GOAL_LIMIT,
+    },
   });
-
-  ws.on('close', () => {
-    spectators.delete(ws);
-  });
-
-  ws.on('error', (err) => {
-    console.warn(`[SPECTATOR ERROR] ${err.message}`);
-  });
-
-});
-
-// ─── Clientes ─────────────────────────────────────────────────────────────────
-wss.on('connection', (ws, payload) => {
-  const userId = String(payload.userId), username = payload.username;
-  console.log(`[CONNECT] ${username} (${userId})`);
-
-  const replacedRestartVoter =
-    players.has(userId) &&
-    players.get(userId).local &&
-    restartVote?.voters.has(userId);
-
-  if (players.has(userId) && players.get(userId).local) {
-    players.get(userId).socket.close(4001, 'Nueva sesión');
-    players.delete(userId);
-  }
-
-  const startX = PLAYER_RADIUS + Math.random() * (WORLD_WIDTH  - 2*PLAYER_RADIUS);
-  const startY = PLAYER_RADIUS + Math.random() * (WORLD_HEIGHT - 2*PLAYER_RADIUS);
- const lateJoiner = [
-  'playing',
-  'running',
-  'in_progress',
-  'first_half',
-  'second_half',
-  'halftime'
-].includes(match.status);
-
-  players.set(userId, {
-    username, socket: ws, local: true, originCoord: COORDINATOR_ID,
-    x: startX, y: startY, intent: {x:0,y:0},
-    
-  extras: {
-  team: null,
-  hp: lateJoiner ? 0 : 100,
-  maxHp: 100,
-  eliminated: lateJoiner,
-  lateJoiner
-}, 
-    ping: null,
-  });
-
-  ws.send(JSON.stringify({ type: 'welcome', you: { userId, username }, coordinatorId: COORDINATOR_ID, world: { width: WORLD_WIDTH, height: WORLD_HEIGHT, playerRadius: PLAYER_RADIUS, tickRate: TICK_RATE } }));
-  ws.send(JSON.stringify({ type: 'chat_history', messages: chatHistory }));
-
-  if (replacedRestartVoter) {
-    reconcileRestartVote();
-  }
+  send(ws, { type: 'chat_history', messages: chatMessages });
+  send(ws, statePayload());
 
   broadcastPlayers();
-  broadcastPeers({ type: 'player_joined', origin: COORDINATOR_ID, userId, username, x: startX, y: startY, extras: players.get(userId).extras });
-ws.on('message', (raw) => {
 
-  let msg;
+  ws.on('message', (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
 
-  try {
-    msg = JSON.parse(raw.toString());
-  } catch {
-    return;
-  }
+    const p = players.get(userId);
+    if (!p) return;
 
-  const p = players.get(userId);
-
-  if (!p) return;
-
-  // ─────────────────────────────────────────────
-  // Votación de reinicio
-  // ─────────────────────────────────────────────
-
-  if (msg.type === 'restart_vote_request') {
-
-    console.log(
-      `[RESTART VOTE] request received userId=${userId} username=${username} team=${p.extras.team ?? null} match.status=${match.status}`
-    );
-
-    if (!hasRestartTeam(p)) {
-      console.log(`[RESTART VOTE] request ignored userId=${userId} reason=no_team`);
+    if (msg.type === 'ping') {
+      send(ws, { type: 'pong', sentAt: msg.sentAt, serverAt: Date.now() });
       return;
     }
 
-    if (restartVote) {
-      console.log(`[RESTART VOTE] request ignored userId=${userId} reason=vote_pending voteId=${restartVote.id}`);
+    if (msg.type === 'latency_update') {
+      if (typeof msg.ping !== 'number' || !Number.isFinite(msg.ping)) return;
+      p.ping = clamp(Math.round(msg.ping), 0, 9999);
       return;
     }
 
-    if (!createRestartVote(userId, username)) {
-      ws.send(JSON.stringify({
-        type: 'restart_vote_rejected',
-        voteId: null,
-        message: 'No hay jugadores con equipo para votar.'
-      }));
-    }
-
-    return;
-}
-
-  
-  if (msg.type === 'restart_vote_response') {
-
-    console.log(
-      `[RESTART VOTE] response received userId=${userId} username=${username} voteId=${msg.voteId} accepted=${msg.accepted}`
-    );
-
-    if (!restartVote) return;
-
-    if (msg.voteId !== restartVote.id) return;
-
-    reconcileRestartVote();
-
-    if (!restartVote) return;
-
-    if (!restartVote.voters.has(userId)) return;
-
-    if (msg.accepted === false) {
-      cancelRestartVote(
-        'restart_vote_rejected',
-        'No se reinici\u00f3 el partido.'
-      );
+    if (msg.type === 'intent') {
+      const dir = msg.intent && msg.intent.dir;
+      if (!dir || typeof dir.x !== 'number' || typeof dir.y !== 'number') return;
+      p.intent = { x: Math.sign(dir.x), y: Math.sign(dir.y) };
       return;
     }
 
-    if (msg.accepted !== true) {
-      return;
-    }
-
-    restartVote.accepted.add(userId);
-
-    console.log(
-      `[RESTART VOTE] response saved voteId=${restartVote.id} accepted=${restartVote.accepted.size} total=${restartVote.voters.size}`
-    );
-
-    emitRestartVoteUpdate();
-
-    if (
-      restartVote &&
-      restartVote.accepted.size >= restartVote.voters.size
-    ) {
-      approveRestartVote();
-    }
-
-    return;
-
-  }
-
-  // ─────────────────────────────────────────────
-  // Ping
-  // ─────────────────────────────────────────────
-
-  if (msg.type === 'ping') {
-
-    ws.send(JSON.stringify({
-      type: 'pong',
-      sentAt: msg.sentAt
-    }));
-
-    return;
-  }
-
-  // ─────────────────────────────────────────────
-  // Iniciar partida
-  // ─────────────────────────────────────────────
-
-  if (msg.type === 'start_match') {
-
-    const totalPlayers = players.size;
-    const previousStatus = match.status;
-
-    console.log(
-      `[START_MATCH] received userId=${userId} username=${username} previousStatus=${previousStatus} players=${totalPlayers}`
-    );
-
-    if (totalPlayers < 2) {
-
-      ws.send(JSON.stringify({
-        type: 'error',
-        message: 'Se necesitan mínimo 2 jugadores'
-      }));
-
-      return;
-    }
-
-    if (
-      match.status === 'playing' ||
-      match.status === 'halftime' ||
-      match.status === 'team_selection'
-    ) {
-      return;
-    }
-
-    startMatch();
-
-    console.log(
-      `[START_MATCH] completed userId=${userId} previousStatus=${previousStatus} currentStatus=${match.status}`
-    );
-
-    return;
-  }
-
-  // ─────────────────────────────────────────────
-  // Latencia
-  // ─────────────────────────────────────────────
-
-  if (msg.type === 'latency_update') {
-
-    if (typeof msg.ping === 'number') {
-
-      p.ping = msg.ping;
-
-      broadcastPeers({
-        type: 'ping_replicate',
-        origin: COORDINATOR_ID,
-        userId,
-        ping: msg.ping
-      });
-    }
-
-    return;
-  }
-
-  // ─────────────────────────────────────────────
-  // Movimiento
-  // ─────────────────────────────────────────────
-
-  if (msg.type === 'intent') {
-
-    if (
-      p.extras.eliminated ||
-      p.extras.lateJoiner
-    ) {
-      return;
-    }
-
-    const dir = msg.intent?.dir;
-
-    if (
-      !dir ||
-      typeof dir.x !== 'number' ||
-      typeof dir.y !== 'number'
-    ) {
-      return;
-    }
-
-    p.intent = {
-      x: Math.sign(dir.x),
-      y: Math.sign(dir.y)
-    };
-
-    broadcastPeers({
-      type: 'intent_replicate',
-      origin: COORDINATOR_ID,
-      userId,
-      intent: {
-        dir: p.intent
-      }
-    });
-
-    return;
-  }
-
-  // ─────────────────────────────────────────────
-  // Extras
-  // ─────────────────────────────────────────────
-
-  if (msg.type === 'extras_update') {
-
-    console.log(
-      `[EXTRAS UPDATE] received userId=${userId} username=${username} match.status=${match.status} ` +
-      `teamSelectionLocked=${match.teamSelectionLocked} extras=${JSON.stringify(msg.extras)}`
-    );
-
-    if (p.extras.lateJoiner) {
-      console.log(`[EXTRAS UPDATE] rejected userId=${userId} reason=lateJoiner`);
-      return;
-    }
-
-    if (
-      !msg.extras ||
-      typeof msg.extras !== 'object' ||
-      Array.isArray(msg.extras)
-    ) {
-      console.log(`[EXTRAS UPDATE] rejected userId=${userId} reason=invalid_extras`);
-      return;
-    }
-
-    if (
-      JSON.stringify(msg.extras).length > 1024
-    ) {
-      console.log(`[EXTRAS UPDATE] rejected userId=${userId} reason=extras_too_large`);
-      return;
-    }
-
-    if (msg.extras.team !== undefined) {
-
-      if (match.teamSelectionLocked) {
-        console.log(`[EXTRAS UPDATE] rejected userId=${userId} reason=team_selection_locked`);
-        return;
-      }
-
-      if (
-        !['red', 'blue']
-          .includes(msg.extras.team)
-      ) {
-        console.log(`[EXTRAS UPDATE] rejected userId=${userId} reason=invalid_team team=${msg.extras.team}`);
-        return;
-      }
-    }
-
-    p.extras = {
-      ...p.extras,
-      ...msg.extras
-    };
-
-    console.log(
-      `[EXTRAS UPDATE] saved userId=${userId} team=${p.extras.team ?? null} extras=${JSON.stringify(p.extras)}`
-    );
-
-    broadcastPeers({
-      type: 'extras_replicate',
-      origin: COORDINATOR_ID,
-      userId,
-      extras: p.extras
-    });
-
-    broadcastState('after extras_update', userId);
-
-    return;
-  }
-
-  // ─────────────────────────────────────────────
-  // Chat
-  // ─────────────────────────────────────────────
-
-  if (msg.type === 'chat') {
-
-    const text =
-      String(msg.text || '').trim();
-
-    if (
-      !text ||
-      text.length > MAX_CHAT_LEN
-    ) {
-      return;
-    }
-
-    const last =
-      chatLastMsg.get(userId) || 0;
-
-    if (
-      Date.now() - last <
-      CHAT_RATE_MS
-    ) {
-      return;
-    }
-
-    chatLastMsg.set(
-      userId,
-      Date.now()
-    );
-
-    const chatMsg =
-      addChat(
-        username,
-        text,
-        Date.now()
-      );
-
-    broadcastAll({
-  type: 'chat_message',
-  message: chatMsg
-});
-
-    broadcastPeers({
-      type: 'chat_replicate',
-      origin: COORDINATOR_ID,
-      message: chatMsg
-    });
-
-    return;
-  }
-
-});
-
-   ws.on('close', () => {
-    const current = players.get(userId);
-
-    if (current && current.socket === ws) {
-      const wasRestartVoter = restartVote?.voters.has(userId);
-
-      players.delete(userId);
-
-      console.log(
-        `[DISCONNECT] ${username} (${userId})`
-      );
-
+    if (msg.type === 'extras_update') {
+      if (!msg.extras || typeof msg.extras !== 'object' || Array.isArray(msg.extras)) return;
+      if (JSON.stringify(msg.extras).length > 1024) return;
+      if (match.teamSelectionLocked && msg.extras.team && msg.extras.team !== p.extras.team) return;
+      p.extras = { ...p.extras, ...sanitizeExtras(msg.extras) };
       broadcastPlayers();
+      return;
+    }
 
-      broadcastPeers({
-        type: 'player_left',
-        origin: COORDINATOR_ID,
-        userId
-      });
-
-      if (wasRestartVoter) {
-        reconcileRestartVote();
+    if (msg.type === 'start_match') {
+      if (players.size < 2) {
+        send(ws, { type: 'match_event', event: 'error', message: 'Se necesitan al menos 2 jugadores para jugar.' });
+        return;
       }
+      if (isPlaying()) return;
+      startMatch();
+      return;
+    }
+
+    if (msg.type === 'restart_vote_request') {
+      handleRestartVoteRequest(userId, username);
+      return;
+    }
+
+    if (msg.type === 'restart_vote_response') {
+      handleRestartVoteResponse(userId, Boolean(msg.accepted));
+      return;
+    }
+
+    if (msg.type === 'chat') {
+      const text = String(msg.text || '').trim().slice(0, 160);
+      if (!text) return;
+      const message = { username, text, ts: Date.now() };
+      chatMessages.push(message);
+      if (chatMessages.length > 40) chatMessages.shift();
+      broadcast({ type: 'chat_message', message });
+    }
+  });
+
+  ws.on('close', (code) => {
+    const current = players.get(userId);
+    if (current && current.socket === ws) {
+      players.delete(userId);
+      if (restartVote && restartVote.voters.has(userId)) cancelRestartVote('Votacion cancelada por desconexion.');
+      console.log(`[DISCONNECT] ${username} (${userId}) - codigo: ${code}`);
+      broadcastPlayers();
     }
   });
 
   ws.on('error', (err) => {
-    console.error(
-      `[WS ERROR] ${username}: ${err.message}`
-    );
+    console.error(`[WS ERROR] ${username}: ${err.message}`);
   });
+});
 
-}); 
-
-// ─── Arrancar ─────────────────────────────────────────────────────────────────
 server.listen(PORT, () => {
-  console.log(`[OK] Coordinador "${COORDINATOR_ID}"`);
-  console.log(`     Clientes    : ws://localhost:${PORT}/connect?token=<JWT>`);
-  console.log(`     Espectadores: ws://localhost:${PORT}/spectator`);
-  console.log(`     Peers       : ws://localhost:${PORT}/peer`);
-  console.log(`     Health      : http://localhost:${PORT}/health`);
-  setTimeout(discoverPeers, 1000);
-  setInterval(discoverPeers, 5000);
+  console.log(`[OK] Coordinador en puerto ${PORT}`);
+  console.log(`     Health: http://localhost:${PORT}/health`);
+  console.log(`     WS:     ws://localhost:${PORT}/connect?token=<JWT>`);
+  console.log(`     Mundo:  ${WORLD_WIDTH}x${WORLD_HEIGHT} | Speed: ${PLAYER_SPEED}px/s | ${TICK_RATE}Hz`);
 });
