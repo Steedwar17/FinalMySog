@@ -20,10 +20,9 @@
       background: #1a1a2e;
       border-bottom: 1px solid #2a2a3e;
       padding: 0.75rem 1.5rem;
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(160px, 1fr) auto minmax(280px, 1fr);
       align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
       gap: 0.5rem;
     }
 
@@ -32,8 +31,65 @@
     .header-right {
       display: flex;
       align-items: center;
+      justify-content: flex-end;
       gap: 0.75rem;
       flex-wrap: wrap;
+    }
+
+    .match-hud {
+      min-width: 320px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.45rem 0.75rem;
+      background: #101624;
+      border: 1px solid #33405e;
+      border-radius: 8px;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+    }
+
+    .hud-team {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.74rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .hud-team.red { color: #ff7272; justify-content: flex-start; }
+    .hud-team.blue { color: #79a0ff; justify-content: flex-end; }
+    .hud-team strong { color: #f6f7ff; font-size: 1.45rem; line-height: 1; }
+
+    .hud-core {
+      min-width: 88px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.05rem;
+      color: #dfe6ff;
+    }
+
+    .hud-phase {
+      max-width: 120px;
+      color: #9aa8c7;
+      font-size: 0.68rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .hud-clock {
+      color: #ffffff;
+      font-size: 1.35rem;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
     }
 
     .user-badge {
@@ -52,6 +108,7 @@
       gap: 0.4rem;
       font-size: 0.85rem;
       color: #aaa;
+      flex-wrap: wrap;
     }
 
     .btn-team {
@@ -88,6 +145,20 @@
       border-color: #4466ff;
     }
 
+    .btn-team:disabled {
+      cursor: not-allowed;
+      filter: grayscale(0.55);
+      opacity: 0.62;
+    }
+
+    .team-lock-note {
+      width: 100%;
+      color: #ffaa66;
+      font-size: 0.72rem;
+      min-height: 1rem;
+      text-align: right;
+    }
+
     .btn-logout {
       padding: 0.35rem 0.8rem;
       background: #3a1a1a;
@@ -100,6 +171,53 @@
     }
 
     .btn-logout:hover { background: #4a2020; }
+
+    .btn-restart {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0.35rem 0.8rem;
+      background: #223018;
+      border: 1px solid #77aa42;
+      border-radius: 20px;
+      color: #c8ff8a;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 700;
+      transition: background 0.2s;
+    }
+
+    .btn-restart.visible { display: inline-flex; }
+    .btn-restart:hover { background: #2d4020; }
+    .btn-restart:disabled {
+      cursor: not-allowed;
+      filter: grayscale(0.5);
+      opacity: 0.62;
+    }
+
+    .btn-play {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0.38rem 1rem;
+      background: #17324a;
+      border: 1px solid #49a8ff;
+      border-radius: 20px;
+      color: #d8f0ff;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 800;
+      transition: background 0.2s, transform 0.2s;
+    }
+
+    .btn-play.visible { display: inline-flex; }
+    .btn-play:hover { background: #21425f; transform: translateY(-1px); }
+    .btn-play:disabled {
+      cursor: not-allowed;
+      filter: grayscale(0.5);
+      opacity: 0.62;
+      transform: none;
+    }
 
     main {
       flex: 1;
@@ -116,10 +234,24 @@
       gap: 0.5rem;
     }
 
+    .canvas-stage {
+      position: relative;
+      line-height: 0;
+    }
+
     #game-canvas {
       display: block;
       border: 2px solid #2a2a3e;
       border-radius: 8px;
+    }
+
+    #confetti-canvas {
+      position: absolute;
+      inset: 2px;
+      width: calc(100% - 4px);
+      height: calc(100% - 4px);
+      pointer-events: none;
+      z-index: 5;
     }
 
     .controls-hint {
@@ -236,6 +368,56 @@
     .score-label.red  { color: #ff6666; }
     .score-label.blue { color: #6699ff; }
     .score-count { font-size: 1.5rem; font-weight: 700; color: #e0e0ff; }
+    .match-state {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #2a2a3e;
+      color: #aaa;
+      font-size: 0.8rem;
+      line-height: 1.4;
+    }
+
+    .chat-log {
+      height: 160px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      padding-right: 0.25rem;
+      font-size: 0.78rem;
+    }
+
+    .chat-empty { color: #555; }
+    .chat-line {
+      background: #14142a;
+      border-radius: 8px;
+      padding: 0.45rem 0.55rem;
+      overflow-wrap: anywhere;
+    }
+    .chat-author { color: #7b68ee; font-weight: 700; }
+    .chat-form {
+      display: flex;
+      gap: 0.4rem;
+      margin-top: 0.75rem;
+    }
+    .chat-form input {
+      min-width: 0;
+      flex: 1;
+      background: #14142a;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      color: #e0e0ff;
+      padding: 0.5rem 0.6rem;
+    }
+    .chat-form button {
+      background: #2a2a4e;
+      border: 1px solid #7b68ee;
+      border-radius: 8px;
+      color: #e0e0ff;
+      cursor: pointer;
+      padding: 0 0.75rem;
+      font-weight: 700;
+    }
 
     .alert-box {
       display: none;
@@ -250,12 +432,98 @@
       font-size: 0.9rem;
     }
     .alert-box.show { display: block; }
+
+    .vote-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      background: rgba(5, 8, 18, 0.62);
+      z-index: 70;
+    }
+
+    .vote-modal.show { display: flex; }
+
+    .vote-box {
+      width: min(420px, 100%);
+      background: #15182a;
+      border: 1px solid #3d4968;
+      border-radius: 8px;
+      padding: 1rem;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .vote-box h3 {
+      color: #ffffff;
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .vote-box p {
+      color: #b8c1dd;
+      font-size: 0.88rem;
+      line-height: 1.4;
+      margin-bottom: 0.9rem;
+    }
+
+    .vote-actions {
+      display: flex;
+      gap: 0.65rem;
+      justify-content: flex-end;
+    }
+
+    .vote-actions button {
+      border-radius: 8px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-weight: 800;
+      padding: 0.5rem 0.8rem;
+    }
+
+    .vote-accept { background: #22502d; border-color: #52d273; color: #dbffe5; }
+    .vote-reject { background: #4b2020; border-color: #d25555; color: #ffe0e0; }
+
+    @media (max-width: 1060px) {
+      header {
+        grid-template-columns: 1fr;
+      }
+      .match-hud {
+        justify-self: stretch;
+        min-width: 0;
+      }
+      .header-right {
+        justify-content: flex-start;
+      }
+      main {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .side-panel {
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
 
   <header>
     <div class="logo">🎮 Multijugador</div>
+    <div class="match-hud" aria-live="polite">
+      <div class="hud-team red">
+        <span>Rojos</span>
+        <strong id="top-score-red">0</strong>
+      </div>
+      <div class="hud-core">
+        <span class="hud-phase" id="top-phase">Esperando</span>
+        <strong class="hud-clock" id="top-clock">--:--</strong>
+      </div>
+      <div class="hud-team blue">
+        <strong id="top-score-blue">0</strong>
+        <span>Azules</span>
+      </div>
+    </div>
     <div class="header-right">
       <span class="user-badge" id="current-username">...</span>
 
@@ -263,17 +531,33 @@
         <span>Equipo:</span>
         <button class="btn-team red"  id="btn-red"  onclick="selectTeam('red')">🔴 Rojos</button>
         <button class="btn-team blue" id="btn-blue" onclick="selectTeam('blue')">🔵 Azules</button>
+        <span class="team-lock-note" id="team-lock-note">Escoge antes del inicio</span>
       </div>
 
+      <button class="btn-play" id="btn-play" onclick="startMatch()">Jugar</button>
+      <button class="btn-restart" id="btn-restart" onclick="restartMatch()">Reiniciar partido</button>
       <button class="btn-logout" onclick="logout()">Cerrar sesión</button>
     </div>
   </header>
 
   <div class="alert-box" id="alert-box"></div>
+  <div class="vote-modal" id="restart-vote-modal">
+    <div class="vote-box">
+      <h3>Reiniciar partido</h3>
+      <p id="restart-vote-text">Un jugador solicitó reiniciar el partido.</p>
+      <div class="vote-actions">
+        <button class="vote-reject" type="button" onclick="answerRestartVote(false)">Rechazar</button>
+        <button class="vote-accept" type="button" onclick="answerRestartVote(true)">Aceptar</button>
+      </div>
+    </div>
+  </div>
 
   <main>
     <div class="canvas-wrapper">
-      <canvas id="game-canvas"></canvas>
+      <div class="canvas-stage">
+        <canvas id="game-canvas"></canvas>
+        <canvas id="confetti-canvas" aria-hidden="true"></canvas>
+      </div>
       <p class="controls-hint">Mover: WASD o flechas</p>
     </div>
 
@@ -311,11 +595,23 @@
             <span class="score-count" id="score-blue">0</span>
           </div>
         </div>
+        <div class="match-state" id="match-state">Esperando estado del juego...</div>
       </div>
 
       <div class="panel-box">
         <h3>Jugadores (<span id="player-count">0</span>)</h3>
         <ul id="players-list"></ul>
+      </div>
+
+      <div class="panel-box">
+        <h3>Chat</h3>
+        <div class="chat-log" id="chat-log">
+          <div class="chat-empty">Sin mensajes</div>
+        </div>
+        <form class="chat-form" onsubmit="sendChatMessage(event)">
+          <input id="chat-input" type="text" maxlength="160" placeholder="Mensaje..." autocomplete="off" />
+          <button type="submit">Enviar</button>
+        </form>
       </div>
     </div>
   </main>
@@ -335,7 +631,8 @@
 
     const API_URL = window.API_BASE_URL || '/api';
     const FALLBACK_COORDINATOR_WS = window.COORDINATOR_WS_URL || '';
-    setAuthDisplay(window.AUTH_ACTIVE_URL || (window.AUTH_URLS && window.AUTH_URLS[0]) || '--');
+    const AUTH_URLS = window.AUTH_URLS || [];
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (AUTH_URLS[0]) || '--');
 
     window.lastState = null;
 
@@ -346,32 +643,82 @@
     let lastPlayersPanelKey = '';
     let lastPanelSignature = '';
     const playersPanelCache = new Map();
+    const chatMessages = [];
     let pingTimer  = null;
     let reconnectTimer = null;
     let manualClose = false;
+    let reconnecting = false;
     let currentCoordinator = null;
+    let authRefreshInFlight = false;
+    let teamSelectionLocked = false;
+    let connectedPlayerCount = 0;
+    let lastScoreSnapshot = null;
+    let confettiAnimation = null;
+    let pendingRestartVote = null;
+    let alertTimer = null;
 
-    async function discoverCoordinator() {
-      const res = await fetch(`${API_URL}/coordinator`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      updateAuthFromResponse(res);
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data.error || data.message || 'No hay coordinadores disponibles.');
+    async function refreshAuthLeader() {
+      if (authRefreshInFlight) return;
+      authRefreshInFlight = true;
+      try {
+        const res = await fetch(`${API_URL}/coordinator`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'ngrok-skip-browser-warning': 'true',
+          }
+        });
+        updateAuthFromResponse(res);
+      } catch {
+        // Keep the last visible auth if the refresh fails.
+      } finally {
+        authRefreshInFlight = false;
       }
+    }
 
-      const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
-      if (!publicUrl) {
-        throw new Error('El directorio no devolvió una URL de coordinador.');
+    setInterval(refreshAuthLeader, 1000);
+
+    async function readJson(res) {
+      try {
+        return await res.json();
+      } catch {
+        return {};
       }
+    }
 
-      return {
-        coordinatorId: data.coordinatorId || data.id || 'desconocido',
-        wsUrl: toWebSocketUrl(publicUrl)
-      };
+    async function discoverCoordinator({ allowFallback = true } = {}) {
+      try {
+        const res = await fetch(`${API_URL}/coordinator`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'ngrok-skip-browser-warning': 'true',
+          }
+        });
+        updateAuthFromResponse(res);
+
+        const data = await readJson(res);
+
+        if (!res.ok) {
+          throw new Error(data.error || data.message || 'No hay coordinadores disponibles.');
+        }
+
+        const publicUrl = data.publicUrl || data.url || data.wsUrl || data.websocketUrl;
+        if (!publicUrl) {
+          throw new Error('El directorio no devolvió una URL de coordinador.');
+        }
+
+        return {
+          coordinatorId: data.coordinatorId || data.id || 'desconocido',
+          wsUrl: toWebSocketUrl(publicUrl)
+        };
+      } catch (err) {
+        if (!allowFallback || !FALLBACK_COORDINATOR_WS) {
+          throw err;
+        }
+        return {
+          coordinatorId: 'fallback',
+          wsUrl: FALLBACK_COORDINATOR_WS
+        };
+      }
     }
 
     function toWebSocketUrl(url) {
@@ -424,19 +771,28 @@
         };
       }
 
+      connectToCoordinator(target);
+    }
+
+    function connectToCoordinator(target) {
       currentCoordinator = target;
-      document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      setCoordinatorDisplay(target.coordinatorId, target.wsUrl);
       setStatus('connecting', `Conectando a ${target.coordinatorId}...`);
 
-      ws = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
+      const socket = new WebSocket(`${target.wsUrl}/connect?token=${encodeURIComponent(token)}`);
+      ws = socket;
 
-      ws.onopen = () => {
+      socket.onopen = () => {
+        if (socket !== ws) return;
         setStatus('connected', 'Conectado');
         hideAlert();
         startPingMonitor();
+        updatePlayButton();
+        updateRestartButton();
       };
 
-      ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (socket !== ws) return;
         let msg;
         try { msg = JSON.parse(event.data); } catch { return; }
 
@@ -447,36 +803,83 @@
 
         if (msg.type === 'welcome') {
           myUserId = msg.you.userId;
-          initGame(msg.world);
+          if (msg.coordinatorId) {
+            currentCoordinator = {
+              ...(currentCoordinator || {}),
+              coordinatorId: msg.coordinatorId
+            };
+            setCoordinatorDisplay(msg.coordinatorId, currentCoordinator.wsUrl);
+          }
+          if (!game) initGame(msg.world);
+          if (myTeam) sendTeamSelection();
           return;
         }
         if (msg.type === 'state') {
           const enriched = {
             ...msg,
-            players: msg.players.map(p => ({
-              ...p,
-              extras: {
-                ...(p.extras || {}),
-                color: teamColor(p.extras && p.extras.team)
-              }
-            }))
+            players: msg.players.map(p => {
+              const lateExtras = lateJoinerExtras(p, msg);
+              return {
+                ...p,
+                extras: {
+                  ...(p.extras || {}),
+                  ...lateExtras,
+                  color: teamColor(p.extras && p.extras.team, lateExtras.lateJoiner)
+                }
+              };
+            })
           };
 
           window.lastState = enriched;
-          receivePlayersUpdate(msg.players);
+          updateGameplayPanel(enriched);
+          handleScoreChange(enriched);
+          receivePlayersUpdate(enriched.players);
           return;
         }
         if (msg.type === 'players_update') {
           receivePlayersUpdate(msg.players);
           return;
         }
+        if (msg.type === 'chat_history') {
+          replaceChatMessages(msg.messages || []);
+          return;
+        }
+        if (msg.type === 'chat' || msg.type === 'chat_message') {
+          appendChatMessage(msg.message || msg);
+          return;
+        }
+        if (msg.type === 'match_event') {
+          if (isGoalEvent(msg)) triggerConfetti();
+          showAlert(msg.message || 'Evento de partida recibido.');
+          return;
+        }
+        if (msg.type === 'restart_vote_request') {
+          showRestartVote(msg);
+          return;
+        }
+        if (msg.type === 'restart_vote_update') {
+          updateRestartVote(msg);
+          return;
+        }
+        if (msg.type === 'restart_vote_cancelled' || msg.type === 'restart_vote_rejected') {
+          hideRestartVote();
+          showAlert(msg.message || 'No se reinició el partido.');
+          return;
+        }
+        if (msg.type === 'restart_vote_approved') {
+          hideRestartVote();
+          showAlert(msg.message || 'Todos aceptaron. Reiniciando partido...');
+          return;
+        }
       };
 
-      ws.onclose = (event) => {
+      socket.onclose = (event) => {
+        if (socket !== ws) return;
         setStatus('disconnected', 'Desconectado');
         stopPingMonitor();
 
-        if (game) { game.stop(); }
+        updatePlayButton();
+        updateRestartButton();
 
         if (manualClose) return;
 
@@ -489,13 +892,23 @@
         }
 
         showAlert('Conexión perdida con el coordinador. Buscando otro disponible...');
-        scheduleReconnect();
+        reconnectAfterUnexpectedClose();
       };
 
-      ws.onerror = () => {
+      socket.onerror = () => {
+        if (socket !== ws) return;
         setStatus('disconnected', 'Error de conexión');
         stopPingMonitor();
+        updatePlayButton();
+        updateRestartButton();
       };
+    }
+
+    function setCoordinatorDisplay(coordinatorId, wsUrl = '') {
+      const el = document.getElementById('coordinator-value');
+      if (!el) return;
+      el.textContent = coordinatorId || '--';
+      el.title = wsUrl || coordinatorId || '';
     }
 
     function startPingMonitor() {
@@ -523,6 +936,58 @@
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+    }
+
+    function delay(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function isSameCoordinator(target, previous) {
+      if (!target || !previous) return false;
+      const targetId = target.coordinatorId;
+      const previousId = previous.coordinatorId;
+      if (targetId && previousId && targetId !== 'desconocido' && previousId !== 'desconocido') {
+        return targetId === previousId;
+      }
+      return target.wsUrl && previous.wsUrl && target.wsUrl === previous.wsUrl;
+    }
+
+    async function discoverReplacementCoordinator(previousCoordinator) {
+      let lastTarget = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const target = await discoverCoordinator({ allowFallback: false });
+        lastTarget = target;
+        if (!isSameCoordinator(target, previousCoordinator)) return target;
+        await delay(500);
+      }
+
+      throw new Error(`El directorio devolvio el mismo coordinador: ${lastTarget?.coordinatorId || 'desconocido'}`);
+    }
+
+    async function reconnectAfterUnexpectedClose() {
+      if (reconnecting) return;
+      reconnecting = true;
+      clearReconnectTimer();
+      showAlert('Conexion perdida. Reconectando...');
+
+      try {
+        const previousCoordinator = currentCoordinator;
+        await delay(1000);
+
+        const target = await discoverReplacementCoordinator(previousCoordinator);
+        connectToCoordinator(target);
+        showAlert(`Reconectado a ${target.coordinatorId}`);
+      } catch (err) {
+        showAlert('No se pudo reconectar. Intenta de nuevo.');
+        setTimeout(() => {
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          window.location.href = 'login.html';
+        }, 1800);
+      } finally {
+        reconnecting = false;
       }
     }
 
@@ -566,6 +1031,12 @@
       game.start();
     }
     window.selectTeam = function(team) {
+      if (teamSelectionLocked) {
+        showAlert('El partido ya inicio. No se puede cambiar de equipo.');
+        return;
+      }
+
+      if (team !== 'red' && team !== 'blue') return;
       myTeam = team;
 
       // Actualizar botones
@@ -573,33 +1044,467 @@
       document.getElementById('btn-blue').classList.toggle('active', team === 'blue');
 
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'extras_update',
-          extras: { team }
-        }));
+        sendTeamSelection();
       }
     };
 
-    function teamColor(team) {
+    function sendTeamSelection() {
+      if (!myTeam || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: 'extras_update',
+        extras: { team: myTeam }
+      }));
+    }
+
+    function teamColor(team, muted = false) {
+      if (muted) return '#7f8798';
       if (team === 'red')  return '#ff4444';
       if (team === 'blue') return '#4466ff';
       return null; 
     }
 
+    function readScore(state) {
+      const score = (state && (state.score || (state.game && state.game.score))) || {};
+      if (Number.isFinite(score.red) || Number.isFinite(score.blue)) {
+        return {
+          red: Number.isFinite(score.red) ? score.red : 0,
+          blue: Number.isFinite(score.blue) ? score.blue : 0
+        };
+      }
+
+      const players = (state && Array.isArray(state.players)) ? state.players : [];
+      return players.reduce((acc, p) => {
+        const team = p.extras && p.extras.team;
+        if (team === 'red') acc.red += 1;
+        if (team === 'blue') acc.blue += 1;
+        return acc;
+      }, { red: 0, blue: 0 });
+    }
+
+    function winnerByScoreLimit(score) {
+      if (!score) return null;
+      if (score.red >= 4 && score.red > score.blue) return 'red';
+      if (score.blue >= 4 && score.blue > score.red) return 'blue';
+      return null;
+    }
+
+    function updateGameplayPanel(state) {
+      const score = readScore(state);
+      setTextIfChanged(document.getElementById('score-red'), String(score.red));
+      setTextIfChanged(document.getElementById('score-blue'), String(score.blue));
+      setTextIfChanged(document.getElementById('top-score-red'), String(score.red));
+      setTextIfChanged(document.getElementById('top-score-blue'), String(score.blue));
+
+      const matchInfo = readMatch(state);
+      const rawScore = state && (state.score || (state.game && state.game.score));
+      const inferredWinner = matchInfo.winner || state.winner || (rawScore ? winnerByScoreLimit(score) : null);
+      const phaseInfo = matchPhaseInfo(matchInfo, state);
+      const clockText = Number.isFinite(phaseInfo.timeLeft) ? formatClock(phaseInfo.timeLeft) : '--:--';
+      const prettyLabel = inferredWinner
+        ? `Ganador: ${teamLabel(inferredWinner)}`
+        : `${phaseInfo.label} | ${clockText}`;
+      setTextIfChanged(document.getElementById('top-phase'), inferredWinner ? 'Final' : phaseInfo.shortLabel);
+      setTextIfChanged(document.getElementById('top-clock'), clockText);
+      updateTeamLock(matchInfo, state);
+      updatePlayButton();
+      updateRestartButton();
+      if (pendingRestartVote && isMatchWaiting(matchInfo)) hideRestartVote();
+
+      const match = state.match || state.round || (state.game && state.game.match) || {};
+      const status = match.status || state.status || 'en_juego';
+      const winner = match.winner || state.winner;
+      const timeLeft = Number.isFinite(match.timeLeft) ? ` · ${Math.ceil(match.timeLeft)}s` : '';
+      const label = winner
+        ? `Ganador: ${winner === 'red' ? 'Rojos' : winner === 'blue' ? 'Azules' : winner}`
+        : `Estado: ${status}${timeLeft}`;
+      setTextIfChanged(document.getElementById('match-state'), label);
+      setTextIfChanged(document.getElementById('match-state'), prettyLabel);
+    }
+
+    function readMatch(state) {
+      return (state && (state.match || state.round || (state.game && state.game.match))) || {};
+    }
+
+    function matchPhaseInfo(match, state) {
+      const status = String(match.status || state.status || 'waiting').toLowerCase();
+      const half = Number.isFinite(match.half) ? match.half : Number.isFinite(match.period) ? match.period : null;
+      const timeLeft = Number.isFinite(match.timeLeft)
+        ? match.timeLeft
+        : Number.isFinite(match.remainingSeconds)
+          ? match.remainingSeconds
+          : null;
+
+      if (status === 'prestart' || status === 'team_selection' || status === 'countdown' || status === 'waiting') {
+        return { label: 'Escoge equipo antes de iniciar', shortLabel: 'Inicio', timeLeft };
+      }
+      if (status === 'halftime' || status === 'break' || status === 'entretiempo') {
+        return { label: 'Entretiempo', shortLabel: 'Descanso', timeLeft };
+      }
+      if (status === 'finished' || status === 'ended' || status === 'final') {
+        return { label: 'Partido terminado', shortLabel: 'Final', timeLeft };
+      }
+      return {
+        label: half ? `Tiempo ${half}` : 'En juego',
+        shortLabel: half ? `T${half}` : 'Juego',
+        timeLeft
+      };
+    }
+
+    function formatClock(seconds) {
+      const safe = Math.max(0, Math.ceil(seconds));
+      const mins = Math.floor(safe / 60);
+      const secs = safe % 60;
+      return `${mins}:${String(secs).padStart(2, '0')}`;
+    }
+
+    function teamLabel(team) {
+      if (team === 'red') return 'Rojos';
+      if (team === 'blue') return 'Azules';
+      return team || '--';
+    }
+
+    function updateTeamLock(match, state) {
+      const explicit = match.teamSelectionLocked;
+      const status = String(match.status || state.status || '').toLowerCase();
+      const selectableStatuses = new Set(['', 'waiting', 'prestart', 'team_selection', 'countdown']);
+      teamSelectionLocked = explicit === false ? false : explicit === true || !selectableStatuses.has(status);
+
+      const redButton = document.getElementById('btn-red');
+      const blueButton = document.getElementById('btn-blue');
+      redButton.disabled = teamSelectionLocked;
+      blueButton.disabled = teamSelectionLocked;
+      setTextIfChanged(
+        document.getElementById('team-lock-note'),
+        teamSelectionLocked ? 'Equipos bloqueados' : 'Escoge antes del inicio'
+      );
+    }
+
+    function updateRestartButton() {
+      const button = document.getElementById('btn-restart');
+      if (!button) return;
+
+      const localPlayer = getLocalPlayer();
+      const canRequestRestart = Boolean(
+        localPlayer &&
+        readPlayerTeam(localPlayer) &&
+        isMatchRestartable(readMatch(window.lastState || {}), window.lastState || {})
+      );
+
+      button.classList.toggle('visible', canRequestRestart);
+      button.disabled = !canRequestRestart || !ws || ws.readyState !== WebSocket.OPEN || Boolean(pendingRestartVote);
+    }
+
+    function updatePlayButton(forceDisabled = false) {
+      const button = document.getElementById('btn-play');
+      if (!button) return;
+
+      const canShow = connectedPlayerCount >= 2 && isMatchWaiting(readMatch(window.lastState || {}));
+      button.classList.toggle('visible', canShow);
+      button.disabled = forceDisabled || !canShow || !ws || ws.readyState !== WebSocket.OPEN;
+      button.textContent = connectedPlayerCount >= 2 ? 'Jugar' : 'Esperando jugadores';
+    }
+
+    function isMatchWaiting(match) {
+      const status = String((match && match.status) || (window.lastState && window.lastState.status) || 'waiting').toLowerCase();
+      return status === '' || status === 'waiting' || status === 'ready';
+    }
+
+    function isMatchActive(match, state = window.lastState || {}) {
+      const rawScore = state && (state.score || (state.game && state.game.score));
+      if (rawScore && winnerByScoreLimit(readScore(state))) return false;
+      const status = String((match && match.status) || state.status || '').toLowerCase();
+      return [
+        'playing',
+        'running',
+        'in_progress',
+        'first_half',
+        'second_half',
+        'halftime',
+        'break',
+        'entretiempo'
+      ].includes(status);
+    }
+
+    function isMatchRestartable(match, state = window.lastState || {}) {
+      if (!state) return false;
+      return !isMatchWaiting(match);
+    }
+
+    function getLocalPlayer() {
+      const players = window.lastState && Array.isArray(window.lastState.players) ? window.lastState.players : [];
+      return players.find(player => player.userId === myUserId) || null;
+    }
+
+    function readPlayerTeam(player) {
+      return player && player.extras ? player.extras.team : null;
+    }
+
+    function readPlayerHp(player) {
+      if (!player) return null;
+      if (Number.isFinite(player.hp)) return player.hp;
+      return player.extras && Number.isFinite(player.extras.hp) ? player.extras.hp : null;
+    }
+
+    function isPlayerOut(player) {
+      const hp = readPlayerHp(player);
+      const extras = player && player.extras ? player.extras : {};
+      return extras.eliminated === true || extras.lateJoiner === true || player.eliminated === true || (Number.isFinite(hp) && hp <= 0);
+    }
+
+    function lateJoinerExtras(player, state) {
+      const extras = player && player.extras ? player.extras : {};
+      if (extras.team || extras.eliminated === true) return {};
+      if (!isMatchActive(readMatch(state), state)) return {};
+
+      return {
+        lateJoiner: true,
+        eliminated: true,
+        hp: 0,
+        maxHp: Number.isFinite(extras.maxHp) ? extras.maxHp : 100
+      };
+    }
+
+    function handleScoreChange(state) {
+      const rawScore = (state && (state.score || (state.game && state.game.score))) || null;
+      if (!rawScore || (!Number.isFinite(rawScore.red) && !Number.isFinite(rawScore.blue))) return;
+      const score = readScore(state);
+      const current = `${score.red}:${score.blue}`;
+      if (lastScoreSnapshot && current !== lastScoreSnapshot) {
+        triggerConfetti();
+      }
+      lastScoreSnapshot = current;
+    }
+
+    function isGoalEvent(msg) {
+      const eventName = String(msg.event || msg.name || msg.kind || '').toLowerCase();
+      const message = String(msg.message || '').toLowerCase();
+      return eventName.includes('goal') || eventName.includes('gol') || message.includes('gol');
+    }
+
+    function triggerConfetti() {
+      const canvas = document.getElementById('confetti-canvas');
+      const gameCanvas = document.getElementById('game-canvas');
+      const ctx = canvas.getContext('2d');
+      const rect = gameCanvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const colors = ['#ff5f6d', '#ffc371', '#44ff88', '#64b5ff', '#f8f4d8'];
+      const pieces = Array.from({ length: 120 }, () => ({
+        x: rect.width / 2 + (Math.random() - 0.5) * 180,
+        y: rect.height * 0.15 + Math.random() * 40,
+        vx: (Math.random() - 0.5) * 7,
+        vy: 2 + Math.random() * 6,
+        size: 4 + Math.random() * 7,
+        rot: Math.random() * Math.PI,
+        spin: (Math.random() - 0.5) * 0.3,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      }));
+      const startedAt = performance.now();
+
+      if (confettiAnimation) cancelAnimationFrame(confettiAnimation);
+
+      function frame(now) {
+        const age = now - startedAt;
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        pieces.forEach(piece => {
+          piece.x += piece.vx;
+          piece.y += piece.vy;
+          piece.vy += 0.08;
+          piece.rot += piece.spin;
+          ctx.save();
+          ctx.translate(piece.x, piece.y);
+          ctx.rotate(piece.rot);
+          ctx.fillStyle = piece.color;
+          ctx.fillRect(-piece.size / 2, -piece.size / 2, piece.size, piece.size * 0.62);
+          ctx.restore();
+        });
+
+        if (age < 1800) {
+          confettiAnimation = requestAnimationFrame(frame);
+        } else {
+          ctx.clearRect(0, 0, rect.width, rect.height);
+          confettiAnimation = null;
+        }
+      }
+
+      confettiAnimation = requestAnimationFrame(frame);
+    }
+
+    function replaceChatMessages(messages) {
+      chatMessages.length = 0;
+      messages.slice(-40).forEach(message => chatMessages.push(normalizeChatMessage(message)));
+      renderChat();
+    }
+
+    function appendChatMessage(message) {
+      chatMessages.push(normalizeChatMessage(message));
+      if (chatMessages.length > 40) chatMessages.shift();
+      renderChat();
+    }
+
+    function normalizeChatMessage(message) {
+      const payload = message || {};
+      return {
+        username: payload.username || payload.author || payload.from || 'Jugador',
+        text: String(payload.text || payload.body || payload.message || '').slice(0, 160),
+        ts: payload.ts || payload.timestamp || Date.now()
+      };
+    }
+
+    function renderChat() {
+      const log = document.getElementById('chat-log');
+      if (!chatMessages.length) {
+        log.innerHTML = '<div class="chat-empty">Sin mensajes</div>';
+        return;
+      }
+
+      log.innerHTML = chatMessages.map(message => `
+        <div class="chat-line">
+          <span class="chat-author">${escapeHtml(message.username)}:</span>
+          ${escapeHtml(message.text)}
+        </div>
+      `).join('');
+      log.scrollTop = log.scrollHeight;
+    }
+
+    window.sendChatMessage = function(event) {
+      event.preventDefault();
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (!text) return;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showAlert('No hay conexion WS para enviar chat.');
+        return;
+      }
+
+      ws.send(JSON.stringify({ type: 'chat', text }));
+      input.value = '';
+    };
+
+    window.restartMatch = function() {
+      const localPlayer = getLocalPlayer();
+      if (!localPlayer || !readPlayerTeam(localPlayer)) {
+        showAlert('Solo jugadores con equipo pueden pedir reinicio.');
+        return;
+      }
+      if (!isMatchRestartable(readMatch(window.lastState || {}), window.lastState || {})) {
+        showAlert('Solo se puede pedir reinicio cuando el partido ya fue iniciado.');
+        return;
+      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showAlert('No hay conexión WS para solicitar reinicio.');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'restart_vote_request',
+        requestedAt: Date.now()
+      }));
+      showAlert('Solicitud de votación enviada. Todos los jugadores con equipo deben aceptar.');
+    };
+
+    function showRestartVote(msg) {
+      const localPlayer = getLocalPlayer();
+      if (!localPlayer || !readPlayerTeam(localPlayer)) return;
+
+      pendingRestartVote = {
+        voteId: msg.voteId || msg.id || String(msg.requestedAt || Date.now()),
+        requestedBy: msg.requestedBy || msg.username || 'un jugador',
+        accepted: Number.isFinite(msg.accepted) ? msg.accepted : 0,
+        total: Number.isFinite(msg.total) ? msg.total : null
+      };
+
+      const modal = document.getElementById('restart-vote-modal');
+      const text = document.getElementById('restart-vote-text');
+      text.textContent = restartVoteText();
+      modal.classList.add('show');
+      updateRestartButton();
+    }
+
+    function updateRestartVote(msg) {
+      if (!pendingRestartVote) return;
+      if (msg.voteId && msg.voteId !== pendingRestartVote.voteId) return;
+
+      pendingRestartVote.accepted = Number.isFinite(msg.accepted) ? msg.accepted : pendingRestartVote.accepted;
+      pendingRestartVote.total = Number.isFinite(msg.total) ? msg.total : pendingRestartVote.total;
+      document.getElementById('restart-vote-text').textContent = restartVoteText();
+    }
+
+    function restartVoteText() {
+      if (!pendingRestartVote) return 'Un jugador solicitó reiniciar el partido.';
+      const total = pendingRestartVote.total ? ` (${pendingRestartVote.accepted}/${pendingRestartVote.total})` : '';
+      return `${pendingRestartVote.requestedBy} solicitó reiniciar el partido. Todos los jugadores con equipo deben aceptar.${total}`;
+    }
+
+    window.answerRestartVote = function(accepted) {
+      if (!pendingRestartVote) return;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showAlert('No hay conexión WS para responder la votación.');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'restart_vote_response',
+        voteId: pendingRestartVote.voteId,
+        accepted: Boolean(accepted),
+        respondedAt: Date.now()
+      }));
+
+      hideRestartVote();
+      showAlert(accepted ? 'Aceptaste reiniciar el partido.' : 'Rechazaste reiniciar el partido.');
+    };
+
+    function hideRestartVote() {
+      pendingRestartVote = null;
+      document.getElementById('restart-vote-modal').classList.remove('show');
+      updateRestartButton();
+    }
+
+    window.startMatch = function() {
+      if (connectedPlayerCount < 2) {
+        showAlert('Se necesitan al menos 2 jugadores para jugar.');
+        return;
+      }
+      if (!isMatchWaiting(readMatch(window.lastState || {}))) {
+        showAlert('La partida ya fue iniciada.');
+        return;
+      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showAlert('No hay conexión WS para iniciar el partido.');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'start_match',
+        requestedAt: Date.now()
+      }));
+      showAlert('Solicitud enviada. Empieza el conteo para escoger equipos.');
+      updatePlayButton(true);
+    };
+
     function receivePlayersUpdate(players) {
       const mergedPlayers = players.map(p => {
         const previous = playersPanelCache.get(p.userId) || {};
+        const lateExtras = lateJoinerExtras(p, window.lastState || {});
         const merged = {
           ...previous,
           ...p,
           extras: {
             ...(previous.extras || {}),
-            ...(p.extras || {})
+            ...(p.extras || {}),
+            ...lateExtras
           }
         };
         playersPanelCache.set(p.userId, merged);
         return merged;
       });
+
+      connectedPlayerCount = mergedPlayers.length;
+      updatePlayButton();
+      updateRestartButton();
 
       const visibleIds = new Set(mergedPlayers.map(p => p.userId));
       for (const userId of playersPanelCache.keys()) {
@@ -608,8 +1513,9 @@
 
       const signature = mergedPlayers.map(p => {
         const team = (p.extras && p.extras.team) || '';
+        const eliminated = p.extras && (p.extras.eliminated || p.extras.lateJoiner);
         const ping = Number.isFinite(p.ping) ? p.ping : '';
-        return `${p.userId}:${p.username}:${team}:${ping}:${p.userId === myUserId}`;
+        return `${p.userId}:${p.username}:${team}:${eliminated}:${ping}:${p.userId === myUserId}`;
       }).join('|');
 
       if (signature === lastPanelSignature) return;
@@ -625,14 +1531,9 @@
 
       setTextIfChanged(countEl, String(players.length));
 
-      let reds = 0, blues = 0;
-      players.forEach(p => {
-        const team = p.extras && p.extras.team;
-        if (team === 'red')  reds++;
-        if (team === 'blue') blues++;
-      });
-      setTextIfChanged(scoreRed, String(reds));
-      setTextIfChanged(scoreBlu, String(blues));
+      const score = readScore(window.lastState);
+      setTextIfChanged(scoreRed, String(score.red));
+      setTextIfChanged(scoreBlu, String(score.blue));
 
       const panelKey = players.map(p => {
         return `${p.userId}:${p.username}:${p.userId === myUserId}`;
@@ -652,10 +1553,13 @@
 
       list.innerHTML = players.map(p => {
         const team  = (p.extras && p.extras.team) || null;
-        const color = teamColor(team) || '#7b68ee';
+        const isOut = isPlayerOut(p);
+        const color = teamColor(team, isOut) || '#7b68ee';
         const isMe  = p.userId === myUserId;
         const ping  = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
-        const tag   = team
+        const tag   = isOut
+          ? `<span class="team-tag none">OUT</span>`
+          : team
           ? `<span class="team-tag ${team}">${team === 'red' ? '🔴' : '🔵'}</span>`
           : `<span class="team-tag none">—</span>`;
         return `
@@ -674,7 +1578,8 @@
         if (!item) return;
 
         const team = (p.extras && p.extras.team) || null;
-        const color = teamColor(team) || '#7b68ee';
+        const isOut = isPlayerOut(p);
+        const color = teamColor(team, isOut) || '#7b68ee';
         const isMe = p.userId === myUserId;
         const ping = Number.isFinite(p.ping) ? `${p.ping} ms` : '-- ms';
         const tag = item.querySelector('.team-tag');
@@ -683,8 +1588,8 @@
         setTextIfChanged(item.querySelector('.player-name'), `${p.username}${isMe ? ' (tu)' : ''}`);
         setTextIfChanged(item.querySelector('.player-ping'), ping);
         if (tag) {
-          tag.className = `team-tag ${team || 'none'}`;
-          setTextIfChanged(tag, team === 'red' ? 'R' : team === 'blue' ? 'A' : '-');
+          tag.className = `team-tag ${isOut ? 'none' : team || 'none'}`;
+          setTextIfChanged(tag, isOut ? 'OUT' : team === 'red' ? 'R' : team === 'blue' ? 'A' : '-');
         }
       });
     }
@@ -697,7 +1602,7 @@
       clearReconnectTimer();
       if (game) game.destroy();
       stopPingMonitor();
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       window.location.href = 'login.html';
@@ -712,9 +1617,13 @@
       const el = document.getElementById('alert-box');
       el.textContent = msg;
       el.classList.add('show');
+      clearTimeout(alertTimer);
+      alertTimer = setTimeout(hideAlert, 3000);
     }
 
     function hideAlert() {
+      clearTimeout(alertTimer);
+      alertTimer = null;
       document.getElementById('alert-box').classList.remove('show');
     }
 

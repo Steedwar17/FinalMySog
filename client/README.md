@@ -40,6 +40,7 @@ client/
   login.html       Registro, login local y login con Google
   lobby.html       Lista de jugadores en linea y coordinador asignado
   game.html        Canvas del juego, conexion WS, reconexion y equipos
+  spectator.html   Vista publica de solo lectura para spectator mode
   game.js          Renderizado y captura de input
   server.js        Servidor Express del cliente
   package.json
@@ -67,6 +68,7 @@ Para desarrollo local:
 PORT=3000
 AUTH_URLS=http://localhost:4001,http://localhost:4002,http://localhost:4003
 COORDINATOR_WS_URL=
+SPECTATOR_WS_PATH=/spectator
 GOOGLE_CLIENT_ID=<tu-client-id>.apps.googleusercontent.com
 ```
 
@@ -188,3 +190,119 @@ La feature extra de equipos envia:
 ```
 
 El cliente pinta cada jugador con el color de su equipo y mantiene el marcador visual de rojos y azules.
+
+Para el examen final, `game.js` tambien renderiza estado autoritativo adicional si el coordinador lo envia:
+
+```json
+{
+  "type": "state",
+  "players": [],
+  "ball": { "x": 400, "y": 300, "radius": 12 },
+  "score": { "red": 1, "blue": 0 },
+  "match": { "status": "playing", "timeLeft": 120 }
+}
+```
+
+El cliente no calcula goles, colisiones, comida, vida ni fin de partida. Solo dibuja `ball`, `score`, `match`, `zones`, `items`, `food` o `points` cuando llegan dentro del `state` replicado por el coordinador.
+
+--- 
+
+## Reinicio de partido
+
+`game.html` incluye un boton **Reiniciar partido**. El boton solo se muestra si el cliente recibe en el `state` que el jugador local tiene equipo (`extras.team = "red"` o `"blue"`) y el partido ya fue iniciado o terminado. Durante `waiting`, seleccion inicial o antes de presionar **Jugar**, el boton permanece oculto.
+
+Para que el boton aparezca correctamente, el coordinador debe guardar y reenviar el equipo despues de este mensaje:
+
+```json
+{
+  "type": "extras_update",
+  "extras": { "team": "red" }
+}
+```
+
+El `state` esperado para cada jugador debe conservar el equipo:
+
+```json
+{
+  "userId": "user-1",
+  "username": "Sog",
+  "extras": {
+    "team": "red"
+  }
+}
+```
+
+Tambien se espera que el coordinador envie un estado de partido claro:
+
+```json
+{
+  "match": {
+    "status": "waiting",
+    "teamSelectionLocked": false
+  }
+}
+```
+
+Estados como `waiting`, `prestart`, `team_selection` o `countdown` habilitan la seleccion de equipo. Estados como `playing`, `running`, `in_progress`, `halftime`, `finished` o `final` bloquean la seleccion y permiten mostrar el boton de reinicio a jugadores con equipo.
+
+Cuando el jugador pide reiniciar, el cliente envia:
+
+```json
+{
+  "type": "restart_vote_request",
+  "requestedAt": 1710000000000
+}
+```
+
+El coordinador debe abrir una votacion con `voteId`. Solo deben votar jugadores conectados con equipo `red` o `blue`; espectadores y jugadores sin equipo no cuentan. Todos los jugadores con equipo deben aceptar.
+
+Mensajes que el cliente entiende:
+
+```json
+{ "type": "restart_vote_request", "voteId": "abc", "requestedBy": "Sog", "accepted": 1, "total": 3 }
+{ "type": "restart_vote_update", "voteId": "abc", "accepted": 2, "total": 3 }
+{ "type": "restart_vote_rejected", "voteId": "abc", "message": "No se reinicio el partido." }
+{ "type": "restart_vote_cancelled", "voteId": "abc", "message": "Votacion cancelada." }
+{ "type": "restart_vote_approved", "voteId": "abc", "message": "Todos aceptaron. Reiniciando partido..." }
+```
+
+Para responder una votacion, el cliente envia:
+
+```json
+{
+  "type": "restart_vote_response",
+  "voteId": "abc",
+  "accepted": true,
+  "respondedAt": 1710000000000
+}
+```
+
+Cuando todos acepten, el coordinador debe reiniciar marcador, ganador, posiciones y estado del mundo; volver a `match.status = "waiting"`; poner `teamSelectionLocked = false`; limpiar `extras.team` y estados de eliminado para que todos puedan escoger equipo otra vez; y emitir un `state` actualizado.
+
+Los avisos rojos de `game.html` se ocultan automaticamente despues de 3 segundos.
+
+--- 
+
+## Spectator mode
+
+La vista publica esta en:
+
+```text
+http://localhost:3000/spectator.html
+```
+
+No requiere token local y se conecta al coordinador con `SPECTATOR_WS_PATH` (`/spectator` por defecto). Si el directorio publico no esta disponible, usa `COORDINATOR_WS_URL` como fallback. Esta pantalla llama a `createGame` con `inputEnabled: false`, por lo que no registra controles ni envia `intent` o `extras_update`.
+
+--- 
+
+## Chat distribuido
+
+`game.html` soporta mensajes WS:
+
+```json
+{ "type": "chat", "text": "hola" }
+{ "type": "chat_message", "message": { "username": "alice", "text": "hola" } }
+{ "type": "chat_history", "messages": [] }
+```
+
+El cliente limita visualmente los mensajes a 160 caracteres y escapa HTML antes de pintarlos. El orden, rate limiting, persistencia de los ultimos mensajes y replicacion entre coordinadores siguen siendo responsabilidad del coordinador.

@@ -181,7 +181,14 @@ function becomeLeader() {
 }
 
 function startElection() {
-  
+  // Si no hay peers activos, ser líder directamente
+  const activePeers = Array.from(peers.values()).filter(ws => ws.readyState === WebSocket.OPEN);
+  if (activePeers.length === 0) {
+    console.log(`[auth] Sin peers activos — convirtiéndome en líder directamente`);
+    becomeLeader();
+    return;
+  }
+
   currentTerm++;
   role = 'replica';
   leaderUrl = null;
@@ -356,6 +363,24 @@ setTimeout(() => {
 }, 1000);
 
 // ── GET /status ────────────────────────────────────────────────────────────
+app.get('/peers', (_req, res) => {
+  console.log('[PEERS] consultado, coordinadores:', coordinators.size);
+  const now = Date.now();
+  const alive = Array.from(coordinators.values())
+    .filter(c => now - c.lastSeen < 6000)
+    .map(c => ({
+      coordinatorId: c.coordinatorId,
+      peerUrl: c.peerUrl,
+      publicUrl: c.publicUrl,
+      connectedPlayers: c.connectedPlayers,
+    }));
+  res.json({ peers: alive });
+});
+
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', service: 'auth-service', role, authId: AUTH_ID });
+});
+
 app.get('/status', (_req, res) => {
   res.json({
     authId: AUTH_ID,
@@ -367,17 +392,6 @@ app.get('/status', (_req, res) => {
     lastAppliedSeq: getLastSeq(),
     users: stmts.countUsers.get().count,
   });
-});
-
-app.get('/peers', (_req, res) => {
-  const authPeers = Array.from(peerInfo.values()).map(p => ({
-    authId: p.authId, publicUrl: p.publicUrl || null, peerUrl: p.peerUrl || null, role: p.role,
-  }));
-  res.json({ peers: authPeers });
-});
-
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'auth-service', role, authId: AUTH_ID });
 });
 
 function requireLeader(req, res, next) {
@@ -428,7 +442,7 @@ app.post('/login', async (req, res) => {
     const dummyHash = '$2b$10$invalidhashtopreventtimingattackxxxxxxxxxxxxxxxxxxxxxxxxx';
     const hashToCompare = user ? user.password_hash : dummyHash;
     const match = await bcrypt.compare(password, hashToCompare);
-    if (!user || !match) return res.status(401).json({ error: 'Credenciales invalidas' });
+    if (!user || !match) return res.status(401).json({ error: 'invalid_credentials' });
     if (user.provider !== 'local') return res.status(401).json({ error: 'Este usuario debe iniciar sesion con Google' });
     console.log(`[auth] Login (local): ${user.username}`);
     return res.status(200).json({ token: emitToken(user), username: user.username });
@@ -494,7 +508,18 @@ app.post('/heartbeat', (req, res) => {
   return res.json({ ok: true });
 });
 
-app.get('/coordinator', (_req, res) => {
+app.get('/coordinator', (req, res) => {
+  // Validar JWT
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'token_required' });
+  }
+  try {
+    jwt.verify(auth.split(' ')[1], JWT_SECRET);
+  } catch(e) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+
   // Si soy réplica, redirigir al líder
   if (role !== 'leader') {
     if (!leaderUrl) return res.status(503).json({ error: 'no_leader' });
