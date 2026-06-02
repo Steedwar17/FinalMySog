@@ -427,6 +427,41 @@ function spawnPlayers() {
     p.y = base.y + (Math.random()-0.5)*jitter;
     p.intent = { x: 0, y: 0 };
   }
+  resolvePlayerCollisions(6);
+}
+
+function resolvePlayerCollisions(iterations = 2) {
+  const list = [...players.values()].filter(p => !p.extras.eliminated);
+  const minDistance = PLAYER_RADIUS * 2;
+
+  for (let pass = 0; pass < iterations; pass++) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.hypot(dx, dy);
+
+        if (dist >= minDistance) continue;
+
+        if (dist < 0.001) {
+          dx = 1;
+          dy = 0;
+          dist = 1;
+        }
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const push = (minDistance - dist) / 2 + 0.01;
+
+        a.x = Math.max(PLAYER_RADIUS, Math.min(WORLD_WIDTH - PLAYER_RADIUS, a.x - nx * push));
+        a.y = Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, a.y - ny * push));
+        b.x = Math.max(PLAYER_RADIUS, Math.min(WORLD_WIDTH - PLAYER_RADIUS, b.x + nx * push));
+        b.y = Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, b.y + ny * push));
+      }
+    }
+  }
 }
 
 function applyGoalPenalty(teamThatScored) {
@@ -452,41 +487,35 @@ function checkGoal() {
 
 function handleGoal(scorer) {
   score[scorer]++;
+
   if (score[scorer] >= WIN_SCORE) {
+    match.status = 'finished';
+    match.winner = scorer;
+    match.timeLeft = 0;
+    match.teamSelectionLocked = false;
 
-  match.status = 'finished';
-  match.winner = scorer;
-  match.timeLeft = 0;
+    resetBall();
+    sendMatchEvent(
+      `Ganaron los ${scorer === 'red' ? 'Rojos' : 'Azules'} por alcanzar ${WIN_SCORE} goles!`,
+      'finished'
+    );
+    broadcastPeers({ type: 'score_replicate', origin: COORDINATOR_ID, score: { ...score } });
+    broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
+    broadcastPeers({ type: 'ball_replicate', origin: COORDINATOR_ID, ball: { x:ball.x, y:ball.y, vx:ball.vx, vy:ball.vy } });
+    broadcastState('after win_score');
+    return;
+  }
 
-  resetBall();
-  match.teamSelectionLocked = true;
-
-  sendMatchEvent(
-    `¡Ganaron los ${scorer === 'red' ? 'Rojos' : 'Azules'} por alcanzar ${WIN_SCORE} goles!`,
-    'finished'
-    
-  );
-  if (match.status === 'finished') {
-  return;
-}
-
-  broadcastPeers({
-    type: 'match_replicate',
-    origin: COORDINATOR_ID,
-    match: { ...match }
-  });
-
-  return;
-}
   applyGoalPenalty(scorer);
-  const msg = `¡Gol de ${scorer === 'red' ? 'Rojos' : 'Azules'}! ${score.red}-${score.blue}`;
+  const msg = `Gol de ${scorer === 'red' ? 'Rojos' : 'Azules'}! ${score.red}-${score.blue}`;
   sendMatchEvent(msg, 'goal');
-  broadcastPeers({ type: 'score_replicate',  origin: COORDINATOR_ID, score: { ...score } });
-  broadcastPeers({ type: 'match_replicate',  origin: COORDINATOR_ID, match: { ...match } });
+  broadcastPeers({ type: 'score_replicate', origin: COORDINATOR_ID, score: { ...score } });
+  broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
   broadcastPeers({ type: 'players_replicate', origin: COORDINATOR_ID, players: snapshot() });
 
   setTimeout(() => {
-    resetBall(); spawnPlayers();
+    resetBall();
+    spawnPlayers();
     broadcastPeers({ type: 'ball_replicate', origin: COORDINATOR_ID, ball: { x:ball.x, y:ball.y, vx:ball.vx, vy:ball.vy } });
   }, 2000);
 }
@@ -668,70 +697,56 @@ function updateBall(dt) {
 let lastTick = Date.now(), tickCount = 0;
 
 function tick() {
-  const now = Date.now(), dt = (now - lastTick) / 1000;
+  const now = Date.now();
+  const dt = Math.min(0.05, (now - lastTick) / 1000);
   lastTick = now;
 
-  // ── Máquina de estados del partido ──────────────────────────────────────────
   if (match.status === 'team_selection') {
     match.timeLeft = Math.max(0, match.timeLeft - dt);
     if (match.timeLeft <= 0) {
       match.teamSelectionLocked = true;
-      match.status   = 'playing';
-      match.half     = 1;
+      match.status = 'playing';
+      match.half = 1;
       match.timeLeft = HALF_DURATION_SEC;
       spawnPlayers();
       console.log(
         `[MATCH STATUS] team_selection -> playing teamSelectionLocked=${match.teamSelectionLocked} timeLeft=${match.timeLeft}`
       );
-      sendMatchEvent('¡Equipos bloqueados! Comienza el partido.', 'start');
+      sendMatchEvent('Equipos bloqueados. Comienza el partido.', 'start');
       broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
       broadcastState('after team_selection_to_playing');
     }
   } else if (match.status === 'playing') {
     match.timeLeft = Math.max(0, match.timeLeft - dt);
     if (match.timeLeft <= 0) {
-      if (match.half === 1)  startHalftime();
-      else                   endMatch();
+      if (match.half === 1) startHalftime();
+      else endMatch();
     }
   } else if (match.status === 'halftime') {
     match.timeLeft = Math.max(0, match.timeLeft - dt);
     if (match.timeLeft <= 0) startSecondHalf();
   }
 
-  // ── Mover jugadores ──────────────────────────────────────────────────────────
-  for (const p of players.values()) {
-   // ── Mover jugadores ──────────────────────────────────────────────────────────
-if (
-  match.status === 'playing' ||
-  match.status === 'team_selection'
-) {
-  for (const p of players.values()) {
+  if (match.status === 'playing' || match.status === 'team_selection') {
+    for (const p of players.values()) {
+      if (p.extras.eliminated) continue;
 
-    if (p.extras.eliminated) continue;
+      const ix = p.intent.x;
+      const iy = p.intent.y;
+      const mag = Math.hypot(ix, iy);
 
-    const ix = p.intent.x;
-    const iy = p.intent.y;
+      if (mag > 0) {
+        p.x += (ix / mag) * PLAYER_SPEED * dt;
+        p.y += (iy / mag) * PLAYER_SPEED * dt;
+      }
 
-    const mag = Math.hypot(ix, iy);
-
-    if (mag > 0) {
-      p.x += (ix / mag) * PLAYER_SPEED * dt;
-      p.y += (iy / mag) * PLAYER_SPEED * dt;
+      p.x = Math.max(PLAYER_RADIUS, Math.min(WORLD_WIDTH - PLAYER_RADIUS, p.x));
+      p.y = Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, p.y));
     }
 
-    p.x = Math.max(
-      PLAYER_RADIUS,
-      Math.min(WORLD_WIDTH - PLAYER_RADIUS, p.x)
-    );
-
-    p.y = Math.max(
-      PLAYER_RADIUS,
-      Math.min(WORLD_HEIGHT - PLAYER_RADIUS, p.y)
-    );
+    resolvePlayerCollisions(3);
   }
-}
 
-  // ── Física de pelota (physics leader = coord con menor ID) ───────────────────
   const isPhysicsLeader = [...peers.keys()].every(id => COORDINATOR_ID < id) || peers.size === 0;
   if (isPhysicsLeader && match.status === 'playing') {
     updateBall(dt);
@@ -739,15 +754,14 @@ if (
       broadcastPeers({ type: 'ball_replicate', origin: COORDINATOR_ID, ball: { x:ball.x, y:ball.y, vx:ball.vx, vy:ball.vy } });
     }
   }
-  }
 
-  // ── Broadcast estado a todos ─────────────────────────────────────────────────
   broadcastAll(fullState());
 
-  // ── Replicar posiciones locales a peers cada 5 ticks ────────────────────────
   if (tickCount % 5 === 0) {
     const lp = [];
-    for (const [uid, p] of players.entries()) { if (p.local) lp.push({ userId: uid, x: p.x, y: p.y }); }
+    for (const [uid, p] of players.entries()) {
+      if (p.local) lp.push({ userId: uid, x: p.x, y: p.y });
+    }
     if (lp.length > 0) broadcastPeers({ type: 'positions_replicate', origin: COORDINATOR_ID, players: lp });
   }
 
