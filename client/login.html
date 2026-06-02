@@ -374,6 +374,8 @@
       const clientId = window.GOOGLE_CLIENT_ID;
       if (!clientId) {
         console.warn('GOOGLE_CLIENT_ID no configurado en .env');
+        // Ocultar los botones de Google y sus divisores
+        hideGoogleOptions();
         return;
       }
 
@@ -394,6 +396,22 @@
         document.getElementById('google-btn-register'),
         { theme: 'filled_black', size: 'large', text: 'signup_with', width: 340 }
       );
+    }
+
+    function hideGoogleOptions() {
+      // Ocultar los divs de Google y sus divisores en ambas pestañas
+      const loginPanel = document.getElementById('panel-login');
+      const registerPanel = document.getElementById('panel-register');
+
+      const loginDivider = loginPanel.querySelector('.divider');
+      const loginGoogleWrapper = loginPanel.querySelector('.google-btn-wrapper');
+      const registerDivider = registerPanel.querySelector('.divider');
+      const registerGoogleWrapper = registerPanel.querySelector('.google-btn-wrapper');
+
+      if (loginDivider) loginDivider.style.display = 'none';
+      if (loginGoogleWrapper) loginGoogleWrapper.style.display = 'none';
+      if (registerDivider) registerDivider.style.display = 'none';
+      if (registerGoogleWrapper) registerGoogleWrapper.style.display = 'none';
     }
 
     async function handleGoogleCredential(response) {
@@ -563,18 +581,13 @@
     function setAuthDisplay(url) {
       const el = document.getElementById('auth-value');
       if (!el) return;
-      el.textContent = compactAuthLabel(url);
+      el.textContent = 'Auth Service';
       el.title = url || '';
     }
 
     function compactAuthLabel(url) {
-      if (!url || url === '--') return '--';
-      try {
-        const parsed = new URL(url);
-        return parsed.host;
-      } catch {
-        return url;
-      }
+      // Ya no se usa, pero lo dejamos por compatibilidad
+      return 'Auth Service';
     }
 
     function showModalMessage(text, type) {
