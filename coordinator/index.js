@@ -550,6 +550,22 @@ function endMatch() {
   broadcastPeers({ type: 'match_replicate', origin: COORDINATOR_ID, match: { ...match } });
 }
 
+function isActiveMatchStatus() {
+  return match.status === 'team_selection' ||
+    match.status === 'playing' ||
+    match.status === 'halftime';
+}
+
+function endMatchIfNoPlayers(reason) {
+  if (!isActiveMatchStatus() || players.size > 0) return false;
+
+  restartVote = null;
+  console.log(`[MATCH] Finalizando por falta de jugadores reason=${reason}`);
+  endMatch();
+  broadcastState(`after auto_end_no_players ${reason}`);
+  return true;
+}
+
 function startMatch() {
   const previousStatus = match.status;
 
@@ -849,6 +865,8 @@ function removePeerPlayers(peerId) {
   if (removedRestartVoter) {
     reconcileRestartVote();
   }
+
+  endMatchIfNoPlayers('peer_disconnected');
 }
 
 // ─── Mensajes entre peers ─────────────────────────────────────────────────────
@@ -868,7 +886,11 @@ function handlePeerMessage(raw, fromPeerId) {
     }
     case 'player_left': {
       const uid = String(msg.userId);
-      if (players.has(uid) && !players.get(uid).local) { players.delete(uid); broadcastPlayers(); }
+      if (players.has(uid) && !players.get(uid).local) {
+        players.delete(uid);
+        broadcastPlayers();
+        endMatchIfNoPlayers('peer_player_left');
+      }
       break;
     }
     case 'intent_replicate': {
@@ -1477,6 +1499,8 @@ ws.on('message', (raw) => {
       if (wasRestartVoter) {
         reconcileRestartVote();
       }
+
+      endMatchIfNoPlayers('local_player_left');
     }
   });
 
