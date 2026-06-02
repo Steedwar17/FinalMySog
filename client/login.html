@@ -556,7 +556,7 @@
     }
 
     function updateAuthFromResponse(res) {
-      const authUrl = res.headers.get('X-Auth-Url');
+      const authUrl = res.headers.get('X-Auth-Active-Url') || res.headers.get('X-Auth-Url');
       if (authUrl) setAuthDisplay(authUrl);
     }
 
