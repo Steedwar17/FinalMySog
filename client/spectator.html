@@ -109,6 +109,70 @@
     }
     .chat-author { color: #7b68ee; font-weight: 700; }
     .empty { color: #555; font-size: 0.82rem; }
+    
+    /* Estilos para el formulario manual */
+    .manual-url-form {
+      background: #14142a;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      padding: 1rem;
+      display: none;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .manual-url-form.show { display: flex; }
+    .manual-url-form label {
+      color: #aaa;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .manual-url-form input {
+      padding: 0.6rem;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 6px;
+      color: #e0e0ff;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .manual-url-form input:focus {
+      border-color: #7b68ee;
+    }
+    .manual-url-form button {
+      padding: 0.6rem;
+      background: #7b68ee;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .manual-url-form button:hover {
+      background: #6a57dd;
+    }
+    .manual-url-form button.cancel {
+      background: #2a2a3e;
+      color: #aaa;
+    }
+    .manual-url-form button.cancel:hover {
+      background: #3a3a4e;
+    }
+    .show-manual-btn {
+      padding: 0.4rem 0.8rem;
+      background: #2a2a3e;
+      border: 1px solid #2a2a3e;
+      border-radius: 4px;
+      color: #aaa;
+      font-size: 0.75rem;
+      cursor: pointer;
+      margin-top: 0.5rem;
+    }
+    .show-manual-btn:hover {
+      background: #3a3a4e;
+      color: #e0e0ff;
+    }
+    
     @media (max-width: 920px) {
       main { flex-direction: column; align-items: stretch; }
       .side-panel { width: 100%; }
@@ -128,7 +192,23 @@
         <h3>Conexion</h3>
         <div><span class="status-dot" id="status-dot"></span><span id="status-text">Buscando coordinador...</span></div>
         <div class="status-row"><span>Coordinador</span><strong id="coordinator-value">--</strong></div>
+        <div class="status-row"><span>ID</span><strong id="coordinator-id">--</strong></div>
         <div class="status-row"><span>Jugadores</span><strong id="player-count">0</strong></div>
+        <button class="show-manual-btn" id="btn-show-manual" onclick="toggleManualForm()" style="display:none;">Ingresar URL manual</button>
+        
+        <div class="manual-url-form" id="manual-url-form">
+          <label for="manual-coordinator-url">URL del Coordinador</label>
+          <input 
+            type="text" 
+            id="manual-coordinator-url" 
+            placeholder="ej: ws://localhost:5000"
+            value=""
+          />
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="cancel" onclick="toggleManualForm()">Cancelar</button>
+            <button onclick="connectManualUrl()">Conectar</button>
+          </div>
+        </div>
       </div>
 
       <div class="panel-box">
@@ -163,7 +243,8 @@
 
     async function discoverCoordinator() {
       try {
-        const res = await fetch(`${API_URL}/coordinator`, {
+        // Intentar primero el endpoint público (sin autenticación)
+        const res = await fetch(`${API_URL}/coordinator-public`, {
           headers: { 'ngrok-skip-browser-warning': 'true' }
         });
         const data = await res.json().catch(() => ({}));
@@ -184,17 +265,20 @@
     async function connect() {
       clearReconnectTimer();
       setStatus('connecting', 'Buscando coordinador...');
+      hideManualButton();
 
       let target;
       try {
         target = await discoverCoordinator();
       } catch (err) {
         setStatus('disconnected', err.message);
+        showManualButton();
         scheduleReconnect();
         return;
       }
 
       document.getElementById('coordinator-value').textContent = target.coordinatorId;
+      document.getElementById('coordinator-id').textContent = target.coordinatorId;
       ws = new WebSocket(`${target.wsUrl}${SPECTATOR_WS_PATH}`);
 
       ws.onopen = () => setStatus('connected', 'Conectado como espectador');
@@ -222,6 +306,7 @@
       };
       ws.onclose = () => {
         setStatus('disconnected', 'Desconectado. Reintentando...');
+        showManualButton();
         scheduleReconnect();
       };
       ws.onerror = () => setStatus('disconnected', 'Error de conexion');
@@ -350,6 +435,87 @@
       const div = document.createElement('div');
       div.appendChild(document.createTextNode(text));
       return div.innerHTML;
+    }
+
+    function showManualButton() {
+      const btn = document.getElementById('btn-show-manual');
+      if (btn) btn.style.display = 'block';
+    }
+
+    function hideManualButton() {
+      const btn = document.getElementById('btn-show-manual');
+      if (btn) btn.style.display = 'none';
+      hideManualForm();
+    }
+
+    function toggleManualForm() {
+      const form = document.getElementById('manual-url-form');
+      if (form) {
+        form.classList.toggle('show');
+        if (form.classList.contains('show')) {
+          const input = document.getElementById('manual-coordinator-url');
+          if (input) input.focus();
+        }
+      }
+    }
+
+    function hideManualForm() {
+      const form = document.getElementById('manual-url-form');
+      if (form) form.classList.remove('show');
+    }
+
+    async function connectManualUrl() {
+      const input = document.getElementById('manual-coordinator-url');
+      const url = (input ? input.value : '').trim();
+      
+      if (!url) {
+        setStatus('disconnected', 'Por favor ingresa una URL válida');
+        return;
+      }
+
+      clearReconnectTimer();
+      hideManualForm();
+      setStatus('connecting', 'Conectando a URL manual...');
+
+      const wsUrl = toWebSocketUrl(url);
+      document.getElementById('coordinator-value').textContent = 'Manual';
+      document.getElementById('coordinator-id').textContent = url;
+      ws = new WebSocket(`${wsUrl}${SPECTATOR_WS_PATH}`);
+
+      ws.onopen = () => {
+        setStatus('connected', 'Conectado como espectador');
+        hideManualButton();
+      };
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+
+        if (msg.type === 'welcome' && msg.world) {
+          initGame(msg.world);
+          return;
+        }
+        if (msg.type === 'state') {
+          window.lastState = enrichState(msg);
+          updatePanel(window.lastState);
+          if (!game) initGame(msg.world || {});
+          return;
+        }
+        if (msg.type === 'chat_history') {
+          replaceChatMessages(msg.messages || []);
+          return;
+        }
+        if (msg.type === 'chat' || msg.type === 'chat_message') {
+          appendChatMessage(msg.message || msg);
+        }
+      };
+      ws.onclose = () => {
+        setStatus('disconnected', 'Desconectado. Reintentando...');
+        showManualButton();
+        scheduleReconnect();
+      };
+      ws.onerror = (err) => {
+        setStatus('disconnected', 'Error: No se pudo conectar a esa URL');
+      };
     }
   </script>
 </body>

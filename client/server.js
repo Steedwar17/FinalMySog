@@ -290,6 +290,11 @@ app.get('/api/coordinator', (req, res) => {
   const pathname = query ? `/coordinator?${query}` : '/coordinator';
   proxyToAuth(req, res, pathname, 'GET');
 });
+app.get('/api/coordinator-public', (req, res) => {
+  const query = new URLSearchParams(req.query).toString();
+  const pathname = query ? `/coordinator-public?${query}` : '/coordinator-public';
+  proxyToAuth(req, res, pathname, 'GET');
+});
 
 app.use(express.static(__dirname));
 

@@ -557,6 +557,39 @@ app.get('/coordinator', (req, res) => {
   return res.json({ coordinatorId: elegido.coordinatorId, publicUrl: elegido.publicUrl });
 });
 
+app.get('/coordinator-public', (req, res) => {
+  // Endpoint público para espectadores (sin autenticación requerida)
+  const excludedIds = new Set(
+    []
+      .concat(req.query.excludeCoordinatorId || [], req.query.excludeId || [])
+      .flatMap(value => String(value || '').split(','))
+      .map(value => value.trim())
+      .filter(Boolean)
+  );
+  const excludedUrls = new Set(
+    []
+      .concat(req.query.excludeUrl || [], req.query.excludePublicUrl || [])
+      .flatMap(value => String(value || '').split(','))
+      .map(value => value.trim().replace(/\/+$/, ''))
+      .filter(Boolean)
+  );
+
+  const now = Date.now();
+  const vivos = Array.from(coordinators.values()).filter((coordinator) => {
+    const publicUrl = String(coordinator.publicUrl || '').trim().replace(/\/+$/, '');
+    return now - coordinator.lastSeen < HEARTBEAT_TIMEOUT
+      && !excludedIds.has(coordinator.coordinatorId)
+      && !excludedUrls.has(publicUrl);
+  });
+  if (vivos.length === 0) {
+    return res.status(503).json({ error: 'no_coordinators_available' });
+  }
+  vivos.sort((a, b) => a.connectedPlayers - b.connectedPlayers);
+  const elegido = vivos[0];
+  console.log(`[auth] Espectador asignado a ${elegido.coordinatorId} (${elegido.connectedPlayers} jugadores)`);
+  return res.json({ coordinatorId: elegido.coordinatorId, publicUrl: elegido.publicUrl });
+});
+
 app.use((_req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada' });
 });
