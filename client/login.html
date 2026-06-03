@@ -38,6 +38,29 @@
       font-size: 0.9rem;
     }
 
+    .auth-status {
+      text-align: center;
+      color: #777;
+      margin: -1.25rem 0 1.5rem;
+      font-size: 0.78rem;
+    }
+
+    .auth-status strong {
+      color: #aaa;
+      font-weight: 600;
+    }
+
+    .spectator-link {
+      display: block;
+      text-align: center;
+      color: #aaa;
+      font-size: 0.85rem;
+      margin-bottom: 1.25rem;
+      text-decoration: none;
+    }
+
+    .spectator-link:hover { color: #7b68ee; }
+
     .tabs {
       display: flex;
       border-bottom: 2px solid #2a2a3e;
@@ -219,7 +242,9 @@
 
   <div class="container">
     <h1>🎮 Multijugador</h1>
-    <p class="subtitle">Sistemas Distribuidos - Taller 5</p>
+    <p class="subtitle">Sistemas Distribuidos - Taller 7</p>
+    <p class="auth-status">Auth: <strong id="auth-value">--</strong></p>
+    <a class="spectator-link" href="spectator.html">Entrar como espectador</a>
 
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('login')">Iniciar sesión</button>
@@ -237,7 +262,7 @@
       <button type="submit" id="btn-login" onclick="handleLogin()">Entrar</button>
 
       <div class="divider">o continuar con</div>
-      // GOOGLE
+
       <div class="google-btn-wrapper">
         <div id="google-btn-login"></div>
       </div>
@@ -274,6 +299,7 @@
         placeholder="Ej: jugador42"
         maxlength="32"
       />
+      
       <div class="message" id="msg-modal"></div>
       <div class="modal-btns">
         <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
@@ -288,21 +314,72 @@
       window.location.href = 'game.html';
     }
 
-    const AUTH_URL = window.AUTH_SERVICE_URL || 'http://localhost:4000';
+    const API_URL = window.API_BASE_URL || '/api';
+    const AUTH_URLS = window.AUTH_URLS || [];
+    setAuthDisplay(window.AUTH_ACTIVE_URL || (AUTH_URLS[0]) || '--');
 
     let pendingGoogleIdToken = null;
+    let googleInitialized = false;
+    let authStatusInFlight = false;
+
+    async function refreshAuthStatus() {
+      if (authStatusInFlight) return;
+      authStatusInFlight = true;
+      try {
+        const res = await fetch(`${API_URL}/auth/status`, {
+          headers: { 'ngrok-skip-browser-warning': 'true' }
+        });
+        const data = await readJson(res);
+        if (res.ok && data.activeUrl) {
+          setAuthDisplay(data.activeUrl);
+        }
+      } catch {
+        // Keep the last visible auth if the status probe fails.
+      } finally {
+        authStatusInFlight = false;
+      }
+    }
+
+    setInterval(refreshAuthStatus, 1000);
+
+    async function requestAuth(endpoint, method, body) {
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      updateAuthFromResponse(res);
+      return res;
+    }
+
+    async function readJson(res) {
+      try {
+        return await res.json();
+      } catch {
+        return {};
+      }
+    }
 
     window.addEventListener('load', () => {
       if (typeof google === 'undefined') return;
       initGoogleSignIn();
     });
-    //INICIAR SESIÓN CON GOOGLE
+
     function initGoogleSignIn() {
+      if (googleInitialized) return;
+
       const clientId = window.GOOGLE_CLIENT_ID;
       if (!clientId) {
         console.warn('GOOGLE_CLIENT_ID no configurado en .env');
+        // Ocultar los botones de Google y sus divisores
+        hideGoogleOptions();
         return;
       }
+
+      googleInitialized = true;
 
       google.accounts.id.initialize({
         client_id: clientId,
@@ -321,6 +398,22 @@
       );
     }
 
+    function hideGoogleOptions() {
+      // Ocultar los divs de Google y sus divisores en ambas pestañas
+      const loginPanel = document.getElementById('panel-login');
+      const registerPanel = document.getElementById('panel-register');
+
+      const loginDivider = loginPanel.querySelector('.divider');
+      const loginGoogleWrapper = loginPanel.querySelector('.google-btn-wrapper');
+      const registerDivider = registerPanel.querySelector('.divider');
+      const registerGoogleWrapper = registerPanel.querySelector('.google-btn-wrapper');
+
+      if (loginDivider) loginDivider.style.display = 'none';
+      if (loginGoogleWrapper) loginGoogleWrapper.style.display = 'none';
+      if (registerDivider) registerDivider.style.display = 'none';
+      if (registerGoogleWrapper) registerGoogleWrapper.style.display = 'none';
+    }
+
     async function handleGoogleCredential(response) {
       const idToken = response.credential;
       await loginWithGoogle(idToken, null);
@@ -331,13 +424,8 @@
       if (username) body.username = username;
 
       try {
-        const res = await fetch(`${AUTH_URL}/auth/google`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-
-        const data = await res.json();
+        const res = await requestAuth('/auth/google', 'POST', body);
+        const data = await readJson(res);
 
         if (res.ok) {
           localStorage.setItem('token', data.token);
@@ -352,10 +440,11 @@
           showModalMessage('Ese nombre ya está tomado, elige otro.', 'error');
 
         } else {
-          showMessage('msg-login', data.error || 'Error al autenticar con Google.', 'error');
+          showMessage('msg-login', data.error || data.message || 'Error al autenticar con Google.', 'error');
         }
 
       } catch (err) {
+        setAuthDisplay('sin respuesta');
         showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
       }
     }
@@ -405,22 +494,18 @@
       btn.textContent = 'Entrando...';
 
       try {
-        const res = await fetch(`${AUTH_URL}/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-
-        const data = await res.json();
+        const res = await requestAuth('/login', 'POST', { username, password });
+        const data = await readJson(res);
 
         if (res.ok) {
           localStorage.setItem('token', data.token);
           localStorage.setItem('username', data.username);
           window.location.href = 'game.html';
         } else {
-          showMessage('msg-login', data.message || 'Credenciales incorrectas.', 'error');
+          showMessage('msg-login', data.error || data.message || 'Credenciales incorrectas.', 'error');
         }
       } catch (err) {
+        setAuthDisplay('sin respuesta');
         showMessage('msg-login', 'No se pudo conectar con el servidor de autenticación.', 'error');
       } finally {
         btn.disabled = false;
@@ -428,7 +513,6 @@
       }
     }
 
-    //local register
     async function handleRegister() {
       const username = document.getElementById('reg-username').value.trim();
       const password = document.getElementById('reg-password').value;
@@ -443,13 +527,8 @@
       btn.textContent = 'Registrando...';
 
       try {
-        const res = await fetch(`${AUTH_URL}/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-
-        const data = await res.json();
+        const res = await requestAuth('/register', 'POST', { username, password });
+        const data = await readJson(res);
 
         if (res.status === 201) {
           showMessage('msg-register', `¡Usuario "${data.username}" creado! Ahora inicia sesión.`, 'success');
@@ -459,9 +538,10 @@
         } else if (res.status === 409) {
           showMessage('msg-register', 'Ese nombre de usuario ya existe.', 'error');
         } else {
-          showMessage('msg-register', data.message || 'Error al registrar.', 'error');
+          showMessage('msg-register', data.error || data.message || 'Error al registrar.', 'error');
         }
       } catch (err) {
+        setAuthDisplay('sin respuesta');
         showMessage('msg-register', 'No se pudo conectar con el servidor de autenticación.', 'error');
       } finally {
         btn.disabled = false;
@@ -491,6 +571,23 @@
       const el = document.getElementById(id);
       el.className = 'message ' + type;
       el.textContent = text;
+    }
+
+    function updateAuthFromResponse(res) {
+      const authUrl = res.headers.get('X-Auth-Active-Url') || res.headers.get('X-Auth-Url');
+      if (authUrl) setAuthDisplay(authUrl);
+    }
+
+    function setAuthDisplay(url) {
+      const el = document.getElementById('auth-value');
+      if (!el) return;
+      el.textContent = 'Auth Service';
+      el.title = url || '';
+    }
+
+    function compactAuthLabel(url) {
+      // Ya no se usa, pero lo dejamos por compatibilidad
+      return 'Auth Service';
     }
 
     function showModalMessage(text, type) {
